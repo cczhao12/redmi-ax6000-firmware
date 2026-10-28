@@ -77,7 +77,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 注入默认 LAN 地址与主机名
+      - name: 注入默认 LAN 地址、主机名与 LED 颜色
         run: |
           mkdir -p openwrt/package/base-files/files/etc/uci-defaults
           cat > openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults <<'EOF'
@@ -98,6 +98,18 @@ jobs:
           esac
 
           uci set system.@system[0].hostname='redmi-ax6000'
+          uci set system.status_led='led'
+          uci set system.status_led.name='Status'
+          uci set system.status_led.sysfs='rgb:status'
+          uci set system.status_led.trigger='netdev'
+          uci set system.status_led.dev='rax0'
+          uci -q delete system.status_led.mode
+          uci add_list system.status_led.mode='tx'
+          uci add_list system.status_led.mode='rx'
+          uci set system.status_led.default='1'
+          uci set system.status_led.color_red='220'
+          uci set system.status_led.color_green='255'
+          uci set system.status_led.color_blue='0'
           uci commit system
 
           rm -f /etc/config/upnpd

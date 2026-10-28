@@ -77,6 +77,35 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: 注入默认 LAN 地址与主机名
+        run: |
+          mkdir -p openwrt/package/base-files/files/etc/uci-defaults
+          cat > openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults <<'EOF'
+          #!/bin/sh
+          cur="$(uci -q get network.lan.ipaddr)"
+          case "$cur" in
+          ""|192.168.1.1)
+              uci -q get network.lan >/dev/null || {
+                  uci set network.lan='interface'
+                  uci set network.lan.device='br-lan'
+                  uci set network.lan.proto='static'
+                  uci set network.lan.netmask='255.255.255.0'
+                  uci set network.lan.ip6assign='60'
+              }
+              uci set network.lan.ipaddr='192.168.6.1'
+              uci commit network
+              ;;
+          esac
+
+          uci set system.@system[0].hostname='redmi-ax6000'
+          uci commit system
+
+          rm -f /etc/config/upnpd
+          exit 0
+          EOF
+          chmod 0755 openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults
+          cat openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults
+
       - name: 应用并校验配置
         run: |
           cp config/ax6000.config openwrt/.config
@@ -93,9 +122,12 @@ jobs:
             grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "缺少 ${p}"; exit 1; }
           done
           echo "--- 应被移除的包 ---"
-          for p in smartdns luci-app-smartdns luci-app-eqos-mtk mtkhqos_util; do
+          for p in smartdns luci-app-smartdns luci-app-eqos-mtk mtkhqos_util \
+                   miniupnpd luci-app-upnp luci-i18n-upnp-zh-cn; do
             if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then echo "不应包含 ${p}"; exit 1; fi
           done
+          test -f package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
+            || { echo "缺少默认配置脚本"; exit 1; }
           echo "配置校验通过"
 
       - name: 预下载源码

@@ -159,7 +159,7 @@ jobs:
       - name: 收集固件
         run: |
           mkdir -p out
-          cp openwrt/bin/targets/mediatek/filogic/*ax6000-mtkuboot* out/
+          cp openwrt/bin/targets/mediatek/filogic/*ax6000-mtkuboot*sysupgrade.bin out/
           cd out
           sha256sum * > SHA256SUMS.txt
           ls -lh

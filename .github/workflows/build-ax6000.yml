@@ -77,7 +77,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 注入默认 LAN 地址、主机名与 LED 颜色
+      - name: 注入默认 LAN 地址、主机名、双灯颜色与 interval 脚本
         run: |
           mkdir -p openwrt/package/base-files/files/etc/uci-defaults
           cat > openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults <<'EOF'
@@ -107,9 +107,23 @@ jobs:
           uci add_list system.status_led.mode='tx'
           uci add_list system.status_led.mode='rx'
           uci set system.status_led.default='1'
-          uci set system.status_led.color_red='220'
+          uci set system.status_led.color_red='235'
           uci set system.status_led.color_green='255'
           uci set system.status_led.color_blue='0'
+
+          # 第二颗灯珠（右侧），与左侧同色同触发器
+          uci set system.network_led='led'
+          uci set system.network_led.name='Network'
+          uci set system.network_led.sysfs='rgb:network'
+          uci set system.network_led.trigger='netdev'
+          uci set system.network_led.dev='rax0'
+          uci -q delete system.network_led.mode
+          uci add_list system.network_led.mode='tx'
+          uci add_list system.network_led.mode='rx'
+          uci set system.network_led.default='1'
+          uci set system.network_led.color_red='235'
+          uci set system.network_led.color_green='255'
+          uci set system.network_led.color_blue='0'
           uci commit system
 
           # 2.4G 固定到 ch1（boot 已先生成无线配置，此处按 band 匹配）
@@ -123,11 +137,34 @@ jobs:
           uci add_list uhttpd.main.listen_http='192.168.6.1:80'
           uci commit uhttpd
 
+          # netdev 的 interval 每次开机/led restart 都会回到 50ms，uci 没有对应选项
+          /etc/init.d/ledinterval enable
+
           rm -f /etc/config/upnpd
           exit 0
           EOF
           chmod 0755 openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults
+
+          mkdir -p openwrt/package/base-files/files/etc/init.d
+          cat > openwrt/package/base-files/files/etc/init.d/ledinterval <<'EOF'
+          #!/bin/sh /etc/rc.common
+          START=97
+
+          boot() {
+          	for d in /sys/class/leds/rgb:status /sys/class/leds/rgb:network; do
+          		[ -d "$d" ] && echo 150 > "$d/interval"
+          	done
+          }
+
+          start() {
+          	boot
+          }
+          EOF
+          chmod 0755 openwrt/package/base-files/files/etc/init.d/ledinterval
+          echo "--- uci-defaults ---"
           cat openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults
+          echo "--- ledinterval ---"
+          cat openwrt/package/base-files/files/etc/init.d/ledinterval
 
       - name: 应用并校验配置
         run: |
@@ -151,6 +188,10 @@ jobs:
           done
           test -f package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
             || { echo "缺少默认配置脚本"; exit 1; }
+          test -f package/base-files/files/etc/init.d/ledinterval \
+            || { echo "缺少 LED interval 脚本"; exit 1; }
+          grep -q "system.network_led" package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
+            || { echo "默认脚本缺少第二颗灯配置"; exit 1; }
           echo "配置校验通过"
 
       - name: 预下载源码

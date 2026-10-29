@@ -112,6 +112,17 @@ jobs:
           uci set system.status_led.color_blue='0'
           uci commit system
 
+          # 2.4G 固定到 ch1（boot 已先生成无线配置，此处按 band 匹配）
+          for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+              [ "$(uci -q get wireless.$s.band)" = "2g" ] && uci set wireless.$s.channel='1'
+          done
+          uci commit wireless
+
+          # LuCI 只监听内网地址，不暴露到 WAN / IPv6
+          uci -q delete uhttpd.main.listen_http
+          uci add_list uhttpd.main.listen_http='192.168.6.1:80'
+          uci commit uhttpd
+
           rm -f /etc/config/upnpd
           exit 0
           EOF

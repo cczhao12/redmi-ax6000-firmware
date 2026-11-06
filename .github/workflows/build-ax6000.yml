@@ -29,6 +29,10 @@ env:
   # 升级上游时只改这一行，这样每次编出来的内核 / 驱动 / WiFi 固件才是同一个东西。
   # 想临时试新版，用 workflow_dispatch 的 source_ref 覆盖，不要动这里。
   UPSTREAM_SHA: 9f397975c7b47ce6986a6e39529d2f72fd5c729d
+  # 构建成功后是否自动发布 Release。
+  # true  = 每次手动/定时构建成功，自动归档成 tag 为 v<日期>-<上游sha前7位> 的 Release
+  # false = 只产 artifact，需要发布时再自己打 v* tag
+  AUTO_RELEASE: 'true'
   TZ: Asia/Shanghai
 
 jobs:
@@ -273,14 +277,32 @@ jobs:
           if-no-files-found: ignore
 
       - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: success() && (env.AUTO_RELEASE == 'true' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 打 tag 触发的构建沿用 tag 名；手动 / 定时触发的构建按“日期 + 上游版本”自动生成
+          if [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/v}" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            echo "由 tag 触发，沿用 ${TAG}"
+          else
+            SHA='${{ steps.src.outputs.sha }}'
+            TAG="v$(date -u +%Y.%m.%d)-$(echo "$SHA" | cut -c1-7)"
+            echo "构建成功，自动归档为 ${TAG}"
+          fi
           {
             echo "上游: ${SOURCE_REPO}@${{ steps.src.outputs.sha }}"
             echo "构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "触发方式: ${GITHUB_EVENT_NAME}"
+            echo "运行记录: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > release-notes.md
-          gh release create "${GITHUB_REF_NAME}" out/* \
-            --title "AX6000 ${GITHUB_REF_NAME}" \
-            --notes-file release-notes.md
+          cat release-notes.md
+          # 幂等：同一个 tag 的 Release 已存在时只覆盖产物，不报 "already exists" 把构建染红
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在，改为覆盖上传产物"
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* \
+              --title "AX6000 ${TAG}" \
+              --notes-file release-notes.md
+          fi

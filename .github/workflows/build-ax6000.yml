@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: '上游 ref（分支 / 标签 / 提交 SHA）'
-        required: true
-        default: '25.12'
+        description: '上游 ref 覆盖（留空 = 使用 UPSTREAM_SHA 钉死的版本；可填分支/tag/commit）'
+        required: false
+        default: ''
       jobs:
         description: '并行编译数（留空自动）'
         required: false
@@ -24,6 +24,11 @@ concurrency:
 
 env:
   SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
+  # ── 钉死的上游提交 ──────────────────────────────────────────
+  # 当前: 2026-10-23 "Merge ImmortalWrt Source"
+  # 升级上游时只改这一行，这样每次编出来的内核 / 驱动 / WiFi 固件才是同一个东西。
+  # 想临时试新版，用 workflow_dispatch 的 source_ref 覆盖，不要动这里。
+  UPSTREAM_SHA: 9f397975c7b47ce6986a6e39529d2f72fd5c729d
   TZ: Asia/Shanghai
 
 jobs:
@@ -52,13 +57,26 @@ jobs:
       - name: 拉取上游源码
         id: src
         run: |
-          REF='${{ github.event.inputs.source_ref || '25.12' }}'
+          REF='${{ github.event.inputs.source_ref }}'
+          if [ -n "$REF" ]; then
+            TARGET="$REF"
+            echo "使用手动指定的 ref: $TARGET"
+          else
+            TARGET="$UPSTREAM_SHA"
+            echo "使用钉死的上游版本: $TARGET"
+          fi
           git init openwrt
           cd openwrt
           git remote add origin "https://github.com/${SOURCE_REPO}.git"
-          git fetch --depth 1 origin "$REF"
+          # GitHub 允许对可达 commit 做 --depth 1 浅拉取
+          git fetch --depth 1 origin "$TARGET"
           git checkout --detach FETCH_HEAD
           SHA=$(git rev-parse HEAD)
+          # 钉死模式下断言实际拉到的就是那个提交，防止上游改历史/拼错 sha 后默默编了别的东西
+          if [ -z "$REF" ] && [ "$SHA" != "$UPSTREAM_SHA" ]; then
+            echo "拉取到的 $SHA 与钉死的 $UPSTREAM_SHA 不一致，终止"
+            exit 1
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "上游: ${SOURCE_REPO}@${SHA}"
           git log -1 --format='%ci  %s'
@@ -132,9 +150,12 @@ jobs:
           done
           uci commit wireless
 
-          # LuCI 只监听内网地址，不暴露到 WAN / IPv6
+          # uhttpd 不绑定具体 IP：绑死 IP 后一旦改网段/切 AP 模式，bind 失败会让整个
+          # LuCI 起不来。默认监听 0.0.0.0:80 是安全的——wan zone 的 input 默认 REJECT，
+          # 外网访问不到后台。
           uci -q delete uhttpd.main.listen_http
-          uci add_list uhttpd.main.listen_http='192.168.6.1:80'
+          uci add_list uhttpd.main.listen_http='0.0.0.0:80'
+          uci add_list uhttpd.main.listen_http='[::]:80'
           uci commit uhttpd
 
           # netdev 的 interval 每次开机/led restart 都会回到 50ms，uci 没有对应选项
@@ -171,14 +192,24 @@ jobs:
           cp config/ax6000.config openwrt/.config
           cd openwrt
           make defconfig
-          echo "--- 设备 ---"
+
+          echo "--- 目标机型 ---"
           grep -E '^CONFIG_TARGET_DEVICE_.*=y' .config
+          # 机型必须被真正选中：上游改名 / 分支切换时 defconfig 会静默丢掉这一项，
+          # 然后按 MULTI_PROFILE 编全部机型，白跑三小时才在收集产物时失败。
+          grep -q '^CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-mtkuboot=y' .config \
+            || { echo "机型 xiaomi_redmi-router-ax6000-mtkuboot 未被选中，终止"; exit 1; }
+          # LuCI 必须是显式选中的，不能靠上游默认值兜底
+          grep -q '^CONFIG_PACKAGE_luci=y' .config \
+            || { echo "LuCI 未被显式选中，会编出没有网页的固件，终止"; exit 1; }
+
           echo "--- 必需包 ---"
           for p in \
             luci-app-autoreboot luci-i18n-autoreboot-zh-cn \
             luci-app-ttyd luci-app-wol \
             luci-app-turboacc-mtk luci-app-mtwifi-cfg \
-            luci-theme-argon kmod-mediatek_hnat kmod-mt_wifi kmod-zram zram-swap; do
+            luci-theme-argon kmod-mediatek_hnat kmod-mt_wifi kmod-zram zram-swap \
+            kmod-leds-ws2812b; do
             grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "缺少 ${p}"; exit 1; }
           done
           echo "--- 应被移除的包 ---"
@@ -206,12 +237,20 @@ jobs:
           J='${{ github.event.inputs.jobs }}'
           [ -n "$J" ] || J=$(nproc)
           echo "并行数: $J"
-          make -j"$J" 2>&1 | tee build.log
+          # 并行编译偶发竞态，失败后降级单线程重试一次（注意：若首轮已耗尽 355min，重试会撞 timeout）
+          make -j"$J" 2>&1 | tee build.log || {
+            echo "并行编译失败，降级单线程重试"
+            make -j1 V=s 2>&1 | tee -a build.log
+          }
 
       - name: 收集固件
         run: |
           mkdir -p out
-          cp openwrt/bin/targets/mediatek/filogic/*ax6000-mtkuboot*sysupgrade.bin out/
+          cp openwrt/bin/targets/mediatek/filogic/*ax6000-mtkuboot*sysupgrade.bin out/ || {
+            echo "未找到 sysupgrade 产物，实际产物如下："
+            ls -l openwrt/bin/targets/mediatek/filogic/ || true
+            exit 1
+          }
           cd out
           sha256sum * > SHA256SUMS.txt
           ls -lh
@@ -238,6 +277,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          {
+            echo "上游: ${SOURCE_REPO}@${{ steps.src.outputs.sha }}"
+            echo "构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          } > release-notes.md
           gh release create "${GITHUB_REF_NAME}" out/* \
             --title "AX6000 ${GITHUB_REF_NAME}" \
-            --notes "上游: ${SOURCE_REPO}@${{ steps.src.outputs.sha }}"
+            --notes-file release-notes.md

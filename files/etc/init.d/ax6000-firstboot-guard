@@ -1,0 +1,32 @@
+#!/bin/sh /etc/rc.common
+# 每次开机兜底：root 没有可用口令时关掉远程管理入口和默认 WiFi。
+# 由 99-ax6000-defaults 执行 enable 创建 /etc/rc.d/S99ax6000-firstboot-guard。
+START=99
+
+root_has_password() {
+  [ -r /etc/shadow ] || return 1
+  pw="$(awk -F: '/^root:/{print $2; exit}' /etc/shadow)"
+  [ -n "$pw" ] || return 1
+  case "$pw" in
+    '!'*|'*'*|'x') return 1 ;;
+  esac
+  return 0
+}
+
+boot() {
+  if ! root_has_password; then
+    for svc in ttyd dropbear; do
+      [ -x "/etc/init.d/$svc" ] && { "/etc/init.d/$svc" disable || true; }
+    done
+    for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+      uci -q set "wireless.$s.disabled"='1'
+    done
+    uci -q commit wireless
+    wifi down 2>/dev/null || true
+  fi
+  return 0
+}
+
+start() {
+  boot
+}

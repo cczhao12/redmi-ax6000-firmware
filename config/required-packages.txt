@@ -1,5 +1,8 @@
 # 构建完成后必须存在的包（只写 CONFIG_PACKAGE_<name>=y 的 name）
-# 注意：注释行会被 workflow 跳过。
+# 与 config/ax6000.config 的显式 =y 项对应（39 项）。
+# 不含 kmod-nft-fullcone：钉死的上游 9f397975 里没有这个包，
+# fullcone 由 fw4 + libnftnl 的 fullcone patch 提供，UCI 写入 fullcone=1 即可。
+# 注意：注释行会被 workflow 跳过；文件必须以换行结尾。
 
 luci
 luci-base
@@ -24,7 +27,6 @@ kmod-conninfra
 kmod-leds-ws2812b
 kmod-zram
 zram-swap
-kmod-nft-fullcone
 kmod-tcp-bbr
 kmod-nft-socket
 kmod-nft-tproxy

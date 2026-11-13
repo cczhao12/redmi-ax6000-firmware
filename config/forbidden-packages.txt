@@ -1,5 +1,5 @@
-# 构建完成后不应出现的包（只写 CONFIG_PACKAGE_<name>=y 的 name）
-# 这些是 AX6000 没有对应硬件、或者会引入安全风险的包。
+# 构建完成后不应出现的包（只写 CONFIG_PACKAGE_=y 的 name）
+# 这些是 AX6000 没有对应硬件、或按需求移除的包。
 # 注意：dependency 仍可能把某个包拉回来；这里失败就说明 config 需要再检查。
 # kmod-tcp-bbr 不在这里：luci-app-turboacc-mtk 会 select 它，保留模块但 tcpcca=cubic。
 
@@ -13,7 +13,7 @@ luci-app-upnp
 luci-i18n-upnp-zh-cn
 miniupnpd
 
-# WOL 按用户要求删除：LuCI app、中文包、etherwake 都不要再被拉回来
+# WOL 按需求移除：LuCI app、中文包、etherwake 都不要再被拉回来
 luci-app-wol
 luci-i18n-wol-zh-cn
 etherwake

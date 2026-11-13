@@ -16,6 +16,7 @@ jobs:
       - name: 检查上游 25.12 是否可达
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
           UPSTREAM_BRANCH: '25.12'
         run: |
@@ -23,7 +24,7 @@ jobs:
           NEW=$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | awk '{print $1}')
           if printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "上游 ${UPSTREAM_BRANCH} 最新: $NEW"
-            echo "build workflow 默认会跟进这个 HEAD；这里只做可达性监控，不为每个新 commit 开 issue。"
+            echo "默认构建使用钉死的 9f397975...，不受本检查影响；这里只做上游健康提示。"
             exit 0
           fi
 
@@ -34,17 +35,16 @@ jobs:
           \`git ls-remote\` 没有拿到 40 位 commit SHA。
 
           影响:
-          - build workflow 的默认“跟进最新”会在这里失败。
-          - 需要检查上游仓库是否改名/删分支/网络异常。
-
-          临时绕过:
-          - workflow_dispatch 里填一个已知可用的 40 位 \`source_ref\` 先构建；
-          - 或等上游恢复后再跑默认构建。
+          - 仅作上游健康提示；默认构建用钉死的 9f397975...，不受影响。
+          - 如需升级上游，先用 workflow_dispatch 的 source_ref 做测试构建，
+            完整编译成功后再改 build-ax6000.yml 的 UPSTREAM_SHA 与 config/feeds.lock。
           EOF
 
-          EXISTING=$(gh issue list --search "$TITLE" --json number --jq '.[0].number // empty' || true)
+          # 这个 job 没有 checkout，gh 必须显式指定仓库；--state all 避免重复开 issue。
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state all --search "$TITLE" \
+            --json number --jq '.[0].number // empty' || true)
           if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body-file /tmp/upstream-body.md
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file /tmp/upstream-body.md
           else
-            gh issue create --title "$TITLE" --body-file /tmp/upstream-body.md
+            gh issue create --repo "$GH_REPO" --title "$TITLE" --body-file /tmp/upstream-body.md
           fi

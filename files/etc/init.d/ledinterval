@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+# netdev trigger 的 interval 每次开机 / led restart 都会回到 50ms，UCI 没有对应选项。
+START=97
+
+boot() {
+  for d in /sys/class/leds/rgb:status /sys/class/leds/rgb:network; do
+    if [ -d "$d" ]; then
+      echo 150 > "$d/interval"
+    fi
+  done
+  return 0
+}
+
+start() {
+  boot
+}

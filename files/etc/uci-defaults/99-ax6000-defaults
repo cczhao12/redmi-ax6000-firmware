@@ -1,0 +1,185 @@
+#!/bin/sh
+# Redmi AX6000 默认配置（幂等）
+# 只在值为空 / 仍是上游默认时写入；已手改的设置不会被覆盖。
+# 首次启动 root 无密码时收紧管理面，设好密码后需手动启用 ttyd / dropbear / WiFi。
+
+uci_has() { uci -q get "$1" >/dev/null 2>&1; }
+uci_empty() { [ -z "$(uci -q get "$1" 2>/dev/null)" ]; }
+
+# root 没有可用口令：空字段、或 !/*/x 锁定标记都算无密码。
+root_has_password() {
+  [ -r /etc/shadow ] || return 1
+  pw="$(awk -F: '/^root:/{print $2; exit}' /etc/shadow)"
+  [ -n "$pw" ] || return 1
+  case "$pw" in
+    '!'*|'*'*|'x') return 1 ;;
+  esac
+  return 0
+}
+
+# ---------------------------------------------------------------- LAN / 主机名
+cur="$(uci -q get network.lan.ipaddr)"
+proto="$(uci -q get network.lan.proto)"
+if [ -z "$cur" ] || [ "$cur" = "192.168.1.1" ]; then
+  if [ -z "$proto" ] || [ "$proto" = "static" ]; then
+    if ! uci_has network.lan; then
+      uci -q set network.lan='interface'
+      uci -q set network.lan.device='br-lan'
+      uci -q set network.lan.proto='static'
+      uci -q set network.lan.netmask='255.255.255.0'
+    fi
+    uci_empty network.lan.ip6assign && uci -q set network.lan.ip6assign='60'
+    uci -q set network.lan.ipaddr='192.168.6.1'
+    uci -q commit network
+  fi
+fi
+
+hostname="$(uci -q get system.@system[0].hostname)"
+case "$hostname" in
+  ''|OpenWrt|ImmortalWrt) uci -q set system.@system[0].hostname='redmi-ax6000' ;;
+esac
+
+if ! uci_has system.status_led; then
+  uci -q set system.status_led='led'
+  uci -q set system.status_led.name='Status'
+  uci -q set system.status_led.sysfs='rgb:status'
+  uci -q set system.status_led.trigger='netdev'
+  uci -q set system.status_led.dev='rax0'
+  uci -q delete system.status_led.mode
+  uci -q add_list system.status_led.mode='tx'
+  uci -q add_list system.status_led.mode='rx'
+  uci -q set system.status_led.default='1'
+  uci -q set system.status_led.color_red='235'
+  uci -q set system.status_led.color_green='255'
+  uci -q set system.status_led.color_blue='0'
+fi
+
+if ! uci_has system.network_led; then
+  uci -q set system.network_led='led'
+  uci -q set system.network_led.name='Network'
+  uci -q set system.network_led.sysfs='rgb:network'
+  uci -q set system.network_led.trigger='netdev'
+  uci -q set system.network_led.dev='rax0'
+  uci -q delete system.network_led.mode
+  uci -q add_list system.network_led.mode='tx'
+  uci -q add_list system.network_led.mode='rx'
+  uci -q set system.network_led.default='1'
+  uci -q set system.network_led.color_red='235'
+  uci -q set system.network_led.color_green='255'
+  uci -q set system.network_led.color_blue='0'
+fi
+uci -q commit system
+
+# ---------------------------------------------------------------- 无线
+for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+  uci_empty "wireless.$s.country" && uci -q set "wireless.$s.country"='CN'
+  if [ "$(uci -q get "wireless.$s.band")" = "2g" ]; then
+    ch="$(uci -q get "wireless.$s.channel")"
+    case "$ch" in
+      ''|auto) uci -q set "wireless.$s.channel"='1' ;;
+    esac
+  fi
+done
+uci -q commit wireless
+
+# ---------------------------------------------------------------- uhttpd
+listen="$(uci -q get uhttpd.main.listen_http)"
+case "$listen" in
+  ''|'0.0.0.0:80')
+    uci -q delete uhttpd.main.listen_http
+    uci -q add_list uhttpd.main.listen_http='0.0.0.0:80'
+    uci -q add_list uhttpd.main.listen_http='[::]:80'
+    uci -q commit uhttpd
+    ;;
+esac
+
+# ---------------------------------------------------------------- TurboACC / HNAT
+uci_has turboacc.config || uci -q set turboacc.config=turboacc
+for kv in 'fastpath=mediatek_hnat' 'fastpath_mh_bind_rate=30' \
+          'fastpath_mh_update_nfct=0' 'tcpcca=cubic'; do
+  key="${kv%%=*}"
+  val="${kv#*=}"
+  uci_empty "turboacc.config.$key" && uci -q set "turboacc.config.$key"="$val"
+done
+uci -q commit turboacc
+
+# ---------------------------------------------------------------- 防火墙
+# fw4 的 flow_offloading 默认就是 0，这里显式写出来，避免上游默认值一变
+# 就和 HNAT 抢卸载（README 声称“显式锁定”，必须由脚本真正落地）。
+for kv in 'fullcone=1' 'fullcone6=0' 'flow_offloading=0' 'flow_offloading_hw=0'; do
+  key="${kv%%=*}"
+  val="${kv#*=}"
+  uci_empty "firewall.@defaults[0].$key" && uci -q set "firewall.@defaults[0].$key"="$val"
+done
+uci -q commit firewall
+
+if ! uci -q show firewall | grep -q "name='block-wan-mgmt'"; then
+  uci -q add firewall rule >/dev/null
+  uci -q set firewall.@rule[-1].name='block-wan-mgmt'
+  uci -q set firewall.@rule[-1].src='wan'
+  uci -q set firewall.@rule[-1].family='any'
+  uci -q set firewall.@rule[-1].proto='tcp'
+  uci -q set firewall.@rule[-1].dest_port='22 80 7681'
+  uci -q set firewall.@rule[-1].target='REJECT'
+  uci -q commit firewall
+fi
+
+# ---------------------------------------------------------------- 首启无密码保护
+if ! root_has_password; then
+  for svc in ttyd dropbear; do
+    [ -x "/etc/init.d/$svc" ] && { "/etc/init.d/$svc" disable || true; }
+  done
+  for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+    uci -q set "wireless.$s.disabled"='1'
+  done
+  uci -q commit wireless
+  wifi down 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------- 性能 / 稳定性（MT7986A）
+# 上游 package/mtk/applications/mtk-smp 的 smp.sh 在 setup_model() 里按
+# *mediatek,mt7986* 走 MT7986_whnat 分支，做 IRQ 亲和性 + RPS 多核分担。
+# OpenWrt 打包时会自动 enable 包内 init 脚本，这里再 enable 一次作为兜底：
+# 上游若改成不带 init / 去掉自动 enable，SMP 调优也不会静默失效。
+[ -x /etc/init.d/mtk_smp ] && /etc/init.d/mtk_smp enable || true
+
+# 可选性能档位：默认沿用上游 schedutil（CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y）。
+# 想降低突发流量下的提频延迟，把 ax6000.perf.cpu_governor 改成 performance；
+# 代价是温度和功耗上升，改回 schedutil 即可回退。仅当该 UCI 段不存在时初始化。
+if ! uci_has ax6000.perf; then
+  uci -q set ax6000.perf='perf'
+  uci -q set ax6000.perf.cpu_governor='schedutil'
+  uci -q commit ax6000
+fi
+
+# 上游 base-files 明确要求自定义 sysctl 写 /etc/sysctl.conf，而不是
+# /etc/sysctl.d/*（后者默认不备份、10-default.conf 升级时会被覆盖）。
+# 按 key 幂等替换：删掉同名旧值再追加，不覆盖你自己加的其它项。
+sysctl_set() {
+  conf=/etc/sysctl.conf
+  [ -f "$conf" ] || : > "$conf"
+  awk -v k="$1" -v v="$2" \
+    'index($0, k "=") == 1 { next } { print } END { print k "=" v }' \
+    "$conf" > "$conf.tmp" || return 1
+  mv "$conf.tmp" "$conf"
+}
+
+# 性能：HNAT + 多连接场景下内核按内存自动算的 conntrack 上限偏小，表满会丢新建连接。
+sysctl_set net.netfilter.nf_conntrack_max 65536
+# 性能：四核 + RPS 下的收包队列，减少小包突发时 rx 丢包。
+sysctl_set net.core.netdev_max_backlog 16384
+# 稳定性：僵死 ESTABLISHED 条目从内核默认的 5 天缩到 1 天，加速表项回收（活跃连接会被刷新）。
+sysctl_set net.netfilter.nf_conntrack_tcp_timeout_established 86400
+# 稳定性：已装 zram-swap，优先把匿名页换到压缩内存，降低 OOM 概率。
+sysctl_set vm.swappiness 100
+# 不再加 kernel.panic_on_oops：上游 10-default.conf 已有 kernel.panic=3，
+# 内核也有 CONFIG_MEDIATEK_WATCHDOG=y；把 oops 也变 panic 容易让驱动偶发异常变成循环重启。
+
+# 首次启动就应用，不必等下次 boot；之后由 /etc/init.d/sysctl 负责。
+sysctl -p /etc/sysctl.conf >/dev/null 2>&1 || true
+
+/etc/init.d/ledinterval enable || true
+/etc/init.d/ax6000-firstboot-guard enable || true
+/etc/init.d/ax6000-perf enable || true
+rm -f /etc/config/upnpd
+exit 0

@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+# 可选性能档位（MT7986A 四核）。
+# 上游内核同时编了 CONFIG_CPU_FREQ_GOV_PERFORMANCE=y 和
+# CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y；默认沿用 schedutil，零行为变化。
+# 想降低突发网络流量下的提频延迟，改 /etc/config/ax6000 的
+# perf.cpu_governor='performance'；注意温度/功耗会上升，改回 schedutil 即可回退。
+START=98
+
+boot() {
+  gov="$(uci -q get ax6000.perf.cpu_governor)"
+  [ -n "$gov" ] || gov='schedutil'
+  case "$gov" in
+    schedutil|performance|ondemand|conservative|powersave|userspace) ;;
+    *) gov='schedutil' ;;
+  esac
+  for cpu in /sys/devices/system/cpu/cpu[0-9]*; do
+    f="$cpu/cpufreq/scaling_governor"
+    [ -w "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = "$gov" ] || echo "$gov" > "$f" 2>/dev/null || true
+  done
+  return 0
+}
+
+start() {
+  boot
+}

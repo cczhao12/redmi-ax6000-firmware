@@ -1,22 +1,31 @@
-# Redmi AX6000 固件（平衡最终版）
+# Redmi AX6000 固件（激进最终版）
 
 > 只针对 **Xiaomi Redmi Router AX6000**（MT7986A，MTK U-Boot 布局）。
 > 不适用于 stock bootloader 布局，也不保证其他 AX6000 变体。
 > 这是个人自用固件，不提供任何担保；刷机前先看 `docs/flashing.md` 和 `docs/recovery.md`。
 
-## 这一版：改进全编入，只回退 4 项
+## 这一版：不做保守回退
 
-相对原 HEAD（`3892b02`），**除下面 4 项外所有改进都编入固件**。目标是在大概率能编译成功的前提下，
-产出与旧成功版明显不同的固件：包集合、运行时默认值、首启安全、性能参数、构建可复现性全都变了。
+`3d34af8` / `3892b02` 的编译侧改动**全部保留**，包括之前为「提高成功率」回退的那 4 项：
 
-| 只回退的 4 项 | 回退到 | 硬理由 |
-|---|---|---|
-| 上游「每次解析 `25.12` 最新 HEAD」 | 钉死 `9f397975...`（run #5 成功出包那次） | 主仓库代码直接决定 `package/kernel/linux`；run #7 换成 `daa7695e` 后失败在 `ERROR: package/kernel/linux failed to build.` |
-| feeds 锁到 2026-11-13 HEAD | 锁到 run #5 触发时刻（`luci c38e5665`、`routing 48c80803`） | 与钉死上游配套；11-13 后这两个 feed 前进过 |
-| `CONFIG_PKG_CHECK_FORMAT_SECURITY=y` | 关闭（回到成功基线） | 给所有包（含内核模块）加 `-Werror=format-security`，是失败首要嫌疑 |
-| 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y` | 不写 | 已核实钉死的上游 `9f397975` 里**没有这个包**，写了也会被 defconfig 静默丢弃；`fullcone=1` 由 uci-defaults + fw4/libnftnl 生效 |
+- 上游默认跟 `25.12` 分支最新 HEAD（每次 run 解析 40 位 SHA）
+- feeds 锁到 2026-11-13 各 feed HEAD
+- `CONFIG_PKG_CHECK_FORMAT_SECURITY=y`、`CONFIG_PKG_RELRO_FULL=y`、`CONFIG_CCACHE=y`
+- 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y`
+- 包精简、移除 WOL、`hnat-detect`/`mtk-smp`、BBR 走 cubic
+- CPU 调频默认 `performance`
 
-`source_ref` 仍是升级上游的测试入口；`make -j1 V=s` 增量重试保留兜底。
+**代价必须说清**：这就是 run #7 失败（`ERROR: package/kernel/linux failed to build.`）的编译输入，
+成功不保证。但失败时**不用改代码**就能定位或回退：
+
+| 输入 | 作用 |
+|---|---|
+| `upstream_ref` 留空 | 跟最新 HEAD，正式构建并发 Release（默认） |
+| `upstream_ref=pinned` | 回退到 `config/upstream.lock`（`9f397975`，唯一出过包的那次） |
+| `upstream_ref=<40 位 SHA>` | 指定版本测试构建，只产 artifact、不发 Release |
+| `hardening=off` | 临时关掉 `CHECK_FORMAT_SECURITY` / `RELRO_FULL` / `CCACHE` 做 A/B |
+
+编译失败会自动打印错误摘要并跑 `make -j1 V=s`，一次拿到具体出错的 kmod 和命令行。
 
 ## 编入固件的改进
 
@@ -26,10 +35,15 @@
   openssh-keygen/libfido2/libcbor/libevdev/libudev-zero、wireless-tools、
   `luci-theme-bootstrap-mod`、`kmod-ifb` 全部不装。
 - **移除 WOL**（`luci-app-wol` / `luci-i18n-wol-zh-cn` / `etherwake`）。
-- `hnat-detect` / `mtk-smp` 显式锁定（已核实 `9f397975` 里都有；MT7986 的 HNAT 检测与 SMP 调优）。
-- `CONFIG_CCACHE=y`、`CONFIG_PKG_RELRO_FULL=y`、`CONFIG_PKG_FORTIFY_SOURCE_2=y` 保留。
-- 删掉上游已不存在的 `TURBOACC_INCLUDE_*` 残留选项。
+- `hnat-detect` / `mtk-smp` 显式锁定（MT7986 的 HNAT 检测与 SMP 调优）。
+- `CONFIG_CCACHE=y`、`CONFIG_PKG_RELRO_FULL=y`、`CONFIG_PKG_CHECK_FORMAT_SECURITY=y`、
+  `CONFIG_PKG_FORTIFY_SOURCE_2=y`。
+- 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y`；删除上游已不存在的 `TURBOACC_INCLUDE_*` 残留。
 - BBR 保持 `cubic`：`kmod-tcp-bbr` 保留（TurboACC 的 select 依赖），不注入 BBR sysctl。
+
+> `kmod-nft-fullcone` 没有放进 `required-packages.txt` 的硬断言：`upstream_ref=pinned`
+> 时上游 `9f397975` 没有这个包，defconfig 会丢弃它，硬断言会让回退模式直接红。
+> 跟最新构建时它会被编进去；被丢弃时逐键差异检查会给 warning。
 
 **运行时侧（`files/` 下 4 个脚本，全部进 rootfs）**
 
@@ -73,7 +87,7 @@ MTK 厂商调试选项（WARP/ATE/AIR_MONITOR/SPECTRUM/ICAP、`WARP_MEMORY_LEAK_
 | 首启管理面 | root 无口令时 disable `ttyd` + `dropbear`，并 disable 所有 `wifi-device` |
 | WAN 管理面 | `block-wan-mgmt`：`src=wan`、`family=any`、`proto=tcp`、`dest_port=22 80 7681`、`target=REJECT` |
 | LED | 状态灯/网络灯 `235/255/0`，`netdev` + `tx/rx`，interval 150ms |
-| CPU 调频 | `schedutil`（上游默认）；可切 `performance`，见下节 |
+| CPU 调频 | `performance`（默认满频，降突发延迟；可改回 `schedutil` 省电降温） |
 | 其他 | WOL 不装；`zram-swap`、`luci-app-autoreboot`、`openssh-sftp-server` 保留 |
 
 > 已手改的值不会被覆盖。例外：`block-wan-mgmt`、首启空密码保护、`/etc/sysctl.conf` 的 4 个键每次升级检查补齐。
@@ -104,8 +118,8 @@ OpenWrt 打包时会自动 enable 包内 init 脚本，uci-defaults 再 `enable`
 
 ### 3. 可选 CPU 调频档位
 
-`ax6000-perf` 每次 boot 读 `ax6000.perf.cpu_governor`，默认 `schedutil`（零行为变化），
-可切 `performance`（温度/功耗上升）并一键回退：
+`ax6000-perf` 每次 boot 读 `ax6000.perf.cpu_governor`，**默认 `performance`**（MT7986A 满频，降延迟，
+温度/功耗上升）；想省电降温就改回 `schedutil`：
 
 ```sh
 uci set ax6000.perf.cpu_governor='performance'; uci commit ax6000; /etc/init.d/ax6000-perf start
@@ -135,9 +149,10 @@ head -1 /proc/interrupts
 
 ### 手动触发
 
-- `source_ref` **留空**：用已验证的 `UPSTREAM_SHA`（`9f397975...`），构建成功后自动发 Release。
-- `source_ref` 填 **40 位小写 commit SHA**：按该 SHA 做**测试构建**，只上传 artifact、不发 Release。
-  这是升级上游前的验证入口。
+- `upstream_ref` **留空**：解析 `25.12` 分支最新 HEAD，正式构建、成功后自动发 Release（默认）。
+- `upstream_ref=pinned`：用 `config/upstream.lock` 里已验证出过包的 `9f397975`。
+- `upstream_ref` 填 **40 位小写 SHA**：按该 SHA 做**测试构建**，只上传 artifact、不发 Release。
+- `hardening`：`on`（默认，`CHECK_FORMAT_SECURITY`/`RELRO_FULL`/`CCACHE` 全开）/ `off`（临时关这三项定位失败）。
 - `jobs` 填 1-64，留空取 `nproc`。
 
 ### push tag
@@ -145,7 +160,7 @@ head -1 /proc/interrupts
 `v*` tag 会触发正式构建，tag 直接用你的 tag 名。
 
 > **没有定时触发**：构建只由手动 `workflow_dispatch` 和 `v*` tag 发起；
-> `upstream-watch.yml` 每周只做上游健康提示，不触发构建、不影响钉死的 `UPSTREAM_SHA`。
+> `upstream-watch.yml` 每周只做上游可达性提示，不触发构建。
 
 ### 自动 tag
 
@@ -160,18 +175,17 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 `out/` 含 `*ax6000-mtkuboot*sysupgrade.bin`、`*.manifest`、`config.buildinfo`、`profiles.json`、
 `BUILD_INFO.txt`、`SHA256SUMS.txt`（对除自身外的所有文件做 sha256）、`feeds.lock`。
 
-## 想把回退的 4 项再拿回来
+## 如果这次构建失败
 
-不要一次叠加，每项单独提交 + 单独完整编译，失败即回退该步：
+默认就是最激进的输入，所以失败并不意外。**不用改代码**，按下面顺序二分：
 
-1. 先跑一次本版确认出包（对照 `docs/validation.md` 的 run #5 成功日志，应看到 `make[2] checksum`）。
-2. 单独开 `CONFIG_PKG_CHECK_FORMAT_SECURITY=y` —— 它是 `package/kernel/linux` 失败的首要嫌疑。
-3. 用 `source_ref` 填上游 `25.12` 新 HEAD 做一次测试构建（不发 Release），成功后再改
-   `UPSTREAM_SHA` 与 `config/feeds.lock`，并把 `kmod-nft-fullcone` 加回来（新上游才有这个包）。
-4. 把结果回写 `docs/validation.md`。
+1. 先看「编译错误摘要」和 `make -j1 V=s` 的输出，定位到具体出错的 `.c`/`.ko`。
+2. 用 `hardening=off` 重跑：这一步能直接判定是不是 `CHECK_FORMAT_SECURITY`/`RELRO_FULL`/`CCACHE` 的问题。
+3. 若还失败，用 `upstream_ref=pinned` 重跑：判定是上游新 HEAD 的问题还是本仓库配置的问题。
+4. 仍失败就用 `upstream_ref` 填某个中间 SHA 逐步逼近，或把出错包对应的 `CONFIG_MTK_*`/包选项临时关掉。
+5. 结论回写 `docs/validation.md`。
 
-> 其余改进（包精简、移除 WOL、`hnat-detect`/`mtk-smp`、`CCACHE`/`RELRO_FULL`、全部运行时与工程化改动）
-> **已经在这一版里了**，不需要等编译通过后再加。
+> 这些开关只是失败后的排查手段，**不改变默认的激进配置**。
 
 ## 刷机
 
@@ -197,8 +211,9 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 .github/workflows/build-ax6000.yml            主构建/发布（上游钉死 9f397975）
 .github/workflows/pr-check.yml               PR / push 配置与脚本校验
 .github/workflows/upstream-watch.yml         上游健康提示（不触发构建）
-config/ax6000.config                         精简版配置（上游钉死 9f397975）
-config/feeds.lock                            run #5 时刻的 5 个 feed SHA
+config/ax6000.config                         激进配置（包精简 + 硬化全开 + 关厂商调试）
+config/feeds.lock                            2026-11-13 的 5 个 feed SHA
+config/upstream.lock                         已验证出过包的上游 SHA（upstream_ref=pinned）
 config/required-packages.txt                 构建后必须存在（39 项）
 config/forbidden-packages.txt                构建后不应存在（39 项）
 files/etc/uci-defaults/99-ax6000-defaults    注入镜像的幂等默认配置 + 性能 sysctl

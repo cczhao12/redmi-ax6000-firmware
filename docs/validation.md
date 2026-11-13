@@ -3,9 +3,32 @@
 > 本文件按时间顺序保留多次验证结果。**读之前先看是哪一轮**：`3d34af8` 的 defconfig 结果
 > 不能代表 `3892b02` 之后的 config；本轮 review 修订只做了静态验证，没有完整编译和上机。
 
-## 2026-11-13 — 平衡最终版（当前仓库状态）
+## 2026-11-13 — 激进最终版（当前仓库状态）
 
-**只回退 4 项，其余改进全部编入。** 上一版「把所有编译输入退回 714b898」过度保守，已废弃。
+**不做保守回退**：`3d34af8`/`3892b02` 的编译侧改动全部保留，并且进一步关闭调试项。
+
+| 输入 | 当前值 |
+|---|---|
+| 上游 | 每次解析 `25.12` 最新 HEAD（`upstream_ref` 可覆盖） |
+| feeds | 2026-11-13 的 5 个 SHA |
+| 编译硬化 | `CHECK_FORMAT_SECURITY=y`、`RELRO_FULL=y`、`CCACHE=y` |
+| fullcone | 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y` |
+| 厂商调试 | WARP_DBG / MEMORY_LEAK_DBG / ATE / AIR_MONITOR / ICAP / SPECTRUM 全关 |
+| 内核调试 | `KERNEL_DEBUG_INFO` / `DEBUG_MISC` / `LOCK_DEBUGGING_SUPPORT` / `PCI_DEBUG` 全关 |
+| 性能 | CPU governor 默认 `performance`；conntrack `131072`、backlog `32768`、rmem/wmem 4MB |
+
+**已知风险**：这正是 run #7 失败的输入（`ERROR: package/kernel/linux failed to build.`），
+再加上关闭厂商调试和内核调试的新变量。关调试项可能触发驱动编译错误（某些宏被代码引用），
+`KERNEL_DEBUG_INFO` 关闭一般是安全的（只减体积/缩短构建）。
+
+**失败排查（不用改代码）**：
+1. 看错误摘要 + `make -j1 V=s` 输出定位具体文件；
+2. `hardening=off` 判定是否 format-security/RELRO/ccache；
+3. `upstream_ref=pinned` 判定是否上游新 HEAD；
+4. `upstream_ref=<中间 SHA>` 逐步逼近；
+5. 结论回写本节。
+
+## 2026-11-13 — 平衡最终版（已废弃，仅作历史记录）
 
 | 只回退的项 | 依据 |
 |---|---|

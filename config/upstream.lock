@@ -1,0 +1,5 @@
+# 已验证在 Actions 上完整出包的上游 commit（run #5 / 714b898）。
+# workflow_dispatch 的 upstream_ref 填 "pinned" 时读这一行；留空则跟 25.12 最新 HEAD。
+# 注意：pinned 只回退上游 SHA，feeds 仍用 config/feeds.lock（2026-11-13），
+# 这个组合没有完整验证过，仅作失败后的排查/回退手段。
+9f397975c7b47ce6986a6e39529d2f72fd5c729d

@@ -6,12 +6,15 @@
 
 ## A. 相对原仓库 `cczhao12/redmi-ax6000-firmware`
 
-| 项目 | 原仓库 / 失败版 | 平衡最终版 |
+| 项目 | 原仓库 / 失败版 `3892b02` | 激进最终版 |
 |---|---|---|
-| 上游 | `3892b02`：每次解析 `25.12` HEAD `daa7695e...` | **钉死** `9f397975...`（run #5 成功出包那次）；`source_ref` 仍是测试新版入口 |
-| feeds | 锁到 2026-11-13（`luci 8f18275b`、`routing 625f9d84`） | 锁到 run #5 时刻（`luci c38e5665`、`routing 48c80803`，另 3 个相同） |
-| 编译硬化 | `CCACHE` / `CHECK_FORMAT_SECURITY` / `RELRO_FULL` 全开 | 保留 `CCACHE`、`RELRO_FULL`、`FORTIFY_SOURCE_2`；**关闭** `CHECK_FORMAT_SECURITY`（`-Werror=format-security`，失败首要嫌疑） |
-| `kmod-nft-fullcone` | 显式 `=y` | 不写：已核实 `9f397975` 里没有该包；`fullcone=1` 由 uci-defaults + fw4/libnftnl 生效 |
+| 上游 | 每次解析 `25.12` HEAD | **相同**：每次解析 `25.12` 最新 HEAD；`upstream_ref=pinned` 时用 `config/upstream.lock` |
+| feeds | 2026-11-13 的 5 个 SHA | **相同** |
+| 编译硬化 | `CCACHE` / `CHECK_FORMAT_SECURITY` / `RELRO_FULL` 全开 | **相同**（全部保留） |
+| `kmod-nft-fullcone` | 显式 `=y` | **相同**，显式 `=y`；不进 `required-packages.txt`，避免 pinned 模式误红 |
+| 厂商调试 | WARP_DBG / MEMORY_LEAK_DBG / ATE / AIR_MONITOR / ICAP / SPECTRUM 全开 | **全部关闭**（减小驱动体积、去掉运行时调试开销） |
+| 内核调试 | `DEBUG_INFO` / `DEBUG_MISC` / `LOCK_DEBUGGING` / `PCI_DEBUG` 开 | **全部关闭**（减小 build_dir、缩短编译时间） |
+| 性能档位 | CPU `schedutil`；conntrack 按内存、backlog 1000 | CPU `performance`；conntrack `131072`、backlog `32768`、rmem/wmem 4MB |
 | 包精简 | 3d34 的精简 | **全部保留**：ATA/SCSI/VFAT/NLS、ebtables、tcpdump/libpcap、htop/nano/libncurses/terminfo、openssh-keygen/libfido2/libcbor/libevdev/libudev-zero、wireless-tools、`luci-theme-bootstrap-mod`、`kmod-ifb` 不装 |
 | WOL | 3d34 移除 | **保留移除**（`luci-app-wol` / `luci-i18n-wol-zh-cn` / `etherwake` 不装） |
 | `hnat-detect` / `mtk-smp` | 3892 新增 | **保留**（已核实 `9f397975` 的 `package/mtk/applications/` 下两者都有） |

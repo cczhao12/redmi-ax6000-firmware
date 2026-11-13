@@ -3,10 +3,14 @@ name: Build Redmi AX6000 (MTK U-Boot)
 on:
   workflow_dispatch:
     inputs:
-      source_ref:
-        description: '测试构建：40 位 commit SHA（留空 = 使用已验证的 UPSTREAM_SHA，正式发布）'
+      upstream_ref:
+        description: '上游：留空=跟 25.12 最新 HEAD（正式发布）；pinned=用 config/upstream.lock；40 位 SHA=测试构建（不发 Release）'
         required: false
         default: ''
+      hardening:
+        description: '编译硬化：on（默认）/ off（临时关 format-security+RELRO+ccache，仅用于定位失败）'
+        required: false
+        default: 'on'
       jobs:
         description: '并行编译数（留空自动，范围 1-64）'
         required: false
@@ -25,10 +29,12 @@ concurrency:
 
 env:
   SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
-  # 钉死到 Actions run #5（714b898）完整编译成功的上游 commit。
-  # 这是本仓库唯一一次在 Actions 上出包的输入，见 docs/validation.md。
-  # 想试新版：workflow_dispatch 的 source_ref 填 40 位 SHA（测试构建，不发 Release）。
-  UPSTREAM_SHA: 9f397975c7b47ce6986a6e39529d2f72fd5c729d
+  # 默认跟 25.12 分支最新 HEAD（激进模式）。需要复现或回退时用 upstream_ref：
+  #   留空   -> 解析 25.12 最新 HEAD，正式构建并发 Release
+  #   pinned -> 用 config/upstream.lock 里已验证出过包的 SHA（run #5 / 714b898）
+  #   40 位  -> 用指定 SHA 做测试构建，只产 artifact，不发 Release
+  UPSTREAM_BRANCH: '25.12'
+  UPSTREAM_LOCK_FILE: config/upstream.lock
   TZ: Asia/Shanghai
 
 jobs:
@@ -70,37 +76,50 @@ jobs:
       - name: 拉取上游源码
         id: src
         env:
-          SOURCE_REF: ${{ inputs.source_ref }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: |
           set -euo pipefail
-          REF="${SOURCE_REF:-}"
-          if [ -n "$REF" ]; then
-            if ! printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
-              echo "source_ref 必须是 40 位小写 commit SHA，或者留空使用已验证的 UPSTREAM_SHA" >&2
-              exit 1
-            fi
-            TARGET="$REF"
-            RELEASE=false
-            echo "测试构建: ${TARGET}（不会发布 Release）"
-          else
-            TARGET="$UPSTREAM_SHA"
-            RELEASE=true
-            echo "正式构建: 已验证上游 ${UPSTREAM_SHA}"
-          fi
+          REF="${UPSTREAM_REF:-}"
+          case "$REF" in
+            '')
+              TARGET=$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | awk '{print $1}')
+              printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$' \
+                || { echo "无法解析上游 ${UPSTREAM_BRANCH} HEAD" >&2; exit 1; }
+              MODE=latest
+              RELEASE=true
+              echo "正式构建: 上游 ${UPSTREAM_BRANCH} 最新 ${TARGET}"
+              ;;
+            pinned)
+              [ -f "$UPSTREAM_LOCK_FILE" ] || { echo "缺少 $UPSTREAM_LOCK_FILE" >&2; exit 1; }
+              TARGET=$(grep -Ev '^[[:space:]]*(#|$)' "$UPSTREAM_LOCK_FILE" | head -1 | awk '{print $1}')
+              printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$' \
+                || { echo "$UPSTREAM_LOCK_FILE 里没有合法 40 位 SHA" >&2; exit 1; }
+              MODE=pinned
+              RELEASE=true
+              echo "正式构建: 钉死上游 ${TARGET}（$UPSTREAM_LOCK_FILE）"
+              ;;
+            *)
+              printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$' \
+                || { echo "upstream_ref 只能是 pinned、40 位小写 SHA，或留空" >&2; exit 1; }
+              TARGET="$REF"
+              MODE=test
+              RELEASE=false
+              echo "测试构建: ${TARGET}（不会发布 Release）"
+              ;;
+          esac
           git init openwrt
           cd openwrt
           git remote add origin "https://github.com/${SOURCE_REPO}.git"
           git fetch --depth 1 origin "$TARGET"
           git checkout --detach FETCH_HEAD
           SHA=$(git rev-parse HEAD)
-          if [ "$SHA" != "$TARGET" ]; then
-            echo "拉取到的 $SHA 与目标 $TARGET 不一致，终止" >&2
-            exit 1
-          fi
+          [ "$SHA" = "$TARGET" ] || { echo "拉取到的 $SHA 与目标 $TARGET 不一致，终止" >&2; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "upstream_mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "UPSTREAM_MODE=$MODE" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
-          echo "上游: ${SOURCE_REPO}@${SHA}"
+          echo "上游: ${SOURCE_REPO}@${SHA} (${MODE})"
           git log -1 --format='%ci  %s'
 
       - name: 计算版本号
@@ -155,6 +174,8 @@ jobs:
       # 固件脚本是仓库里的文件，不再塞在 YAML heredoc 里：
       # PR 可以 sh -n 校验，也不会再漏掉 "enable" 这类一行改动。
       - name: 注入默认配置、构建信息和首启保护
+        env:
+          HARDENING: ${{ inputs.hardening }}
         run: |
           set -euo pipefail
           DEST=openwrt/package/base-files/files
@@ -174,6 +195,8 @@ jobs:
             echo "REPO_SHA=${GITHUB_SHA}"
             echo "CONFIG_SHA256=$(sha256sum config/ax6000.config | cut -d' ' -f1)"
             echo "FEEDS_LOCK_SHA256=$(sha256sum out/feeds.lock | cut -d' ' -f1)"
+            echo "UPSTREAM_MODE=${UPSTREAM_MODE:-latest}"
+            echo "HARDENING=${HARDENING:-on}"
             echo "BUILD_DATE=${BUILD_DATE}"
           } > "$DEST"/etc/ax6000-build-info
 
@@ -187,9 +210,19 @@ jobs:
           cat "$DEST"/etc/ax6000-build-info
 
       - name: 应用并校验配置
+        env:
+          HARDENING: ${{ inputs.hardening }}
         run: |
           set -euo pipefail
           cp config/ax6000.config openwrt/.config
+          if [ "${HARDENING:-on}" = "off" ]; then
+            echo "::warning::hardening=off：临时关闭 CHECK_FORMAT_SECURITY / RELRO_FULL / CCACHE，仅用于定位失败，产物不要发布"
+            sed -i \
+              -e 's/^CONFIG_PKG_CHECK_FORMAT_SECURITY=y/# CONFIG_PKG_CHECK_FORMAT_SECURITY is not set/' \
+              -e 's/^CONFIG_PKG_RELRO_FULL=y/# CONFIG_PKG_RELRO_FULL is not set/' \
+              -e 's/^CONFIG_CCACHE=y/# CONFIG_CCACHE is not set/' \
+              openwrt/.config
+          fi
           cd openwrt
           make defconfig
           cd ..
@@ -264,6 +297,8 @@ jobs:
             echo "CONFIG_SHA256=$(sha256sum ../config/ax6000.config | cut -d' ' -f1)"
             echo "BUILD_DATE=${BUILD_DATE}"
             echo "FEEDS_LOCK_SHA256=$(sha256sum feeds.lock | cut -d' ' -f1)"
+            echo "UPSTREAM_MODE=${UPSTREAM_MODE:-latest}"
+            echo "HARDENING=${{ inputs.hardening || 'on' }}"
             echo "KERNEL=$(grep -m1 '^CONFIG_KERNEL_VERSION=' ../openwrt/.config || true)"
             echo "WIFI_DRIVER=$(grep -m1 '^CONFIG_MTK_MT_WIFI_DRIVER_VERSION_' ../openwrt/.config || true)"
             echo "WIFI_FIRMWARE=$(grep -m1 '^CONFIG_MTK_MT_WIFI_FIRMWARE_PATH_MT7986=' ../openwrt/.config || true)"

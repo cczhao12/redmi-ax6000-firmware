@@ -1,6 +1,31 @@
 # Changelog
 
-## 2026-11-13 — 平衡最终版（当前版本：改进全编入，只回退 4 项）
+## 2026-11-13 — 激进最终版（当前版本：不做保守回退）
+
+上一版「平衡最终版」为成功率回退了 4 项编译输入，被指出仍保守。本版把这 4 项全部恢复，
+默认就跑最激进的组合：
+
+- 上游：每次 run 解析 `25.12` 最新 HEAD
+- feeds：2026-11-13 各 feed HEAD
+- `CONFIG_PKG_CHECK_FORMAT_SECURITY=y`、`CONFIG_PKG_RELRO_FULL=y`、`CONFIG_CCACHE=y`
+- 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y`
+- 关闭厂商调试/诊断：`WARP_DBG_SUPPORT`、`WARP_MEMORY_LEAK_DBG`、`MTK_ATE_SUPPORT`、
+  `MTK_AIR_MONITOR`、`MTK_ICAP_SUPPORT`、`MTK_SPECTRUM_SUPPORT`
+- 关闭内核调试：`KERNEL_DEBUG_INFO`、`KERNEL_DEBUG_MISC`、`KERNEL_LOCK_DEBUGGING_SUPPORT`、`KERNEL_PCI_DEBUG`
+- CPU 调频默认 `performance`
+- sysctl 提到激进档：conntrack `131072`、backlog `32768`、`rmem_max`/`wmem_max` 4MB
+
+保留：包精简、移除 WOL、`hnat-detect`/`mtk-smp`、BBR cubic、全部运行时脚本与工程化。
+
+### 失败时不用改代码
+
+- `upstream_ref`：留空=最新；`pinned`=`config/upstream.lock`（`9f397975`）；40 位 SHA=测试构建
+- `hardening=off`：临时关 `CHECK_FORMAT_SECURITY` / `RELRO_FULL` / `CCACHE`
+- 编译失败自动打印错误摘要 + `make -j1 V=s`
+
+这两个开关只用于失败排查，不改变默认配置。
+
+## 2026-11-13 — 平衡最终版（已废弃，仅作历史记录）
 
 上一版为追求成功率把编译输入整体退回 `714b898`，等于把用户要的改进全砍了。本版重做：
 **除下列 4 项外，所有改进都编入固件**。

@@ -1,9 +1,9 @@
 # 默认值明细
 
-> **平衡最终版**：包精简、移除 WOL、`hnat-detect`/`mtk-smp`、`CCACHE`/`RELRO_FULL` 等
-> 编译侧改进全部保留；只回退上游 HEAD、feeds 时刻、`CHECK_FORMAT_SECURITY`、不存在的
-> `kmod-nft-fullcone` 这 4 项，见 `docs/validation.md`。
-> 本文件描述的运行时默认值由 `files/` 下的脚本注入固件，全部保留。
+> **激进最终版**：不做保守回退。上游跟 `25.12` 最新、feeds 锁 2026-11-13、编译硬化全开、
+> `kmod-nft-fullcone` 显式锁定；并关闭厂商调试（WARP/ATE/AIR_MONITOR/ICAP/SPECTRUM）
+> 与内核调试（DEBUG_INFO 等）。运行时默认值由 `files/` 下的脚本注入固件，全部保留。
+> 牺牲了确定性换取功能和性能，见 `docs/validation.md`。
 
 注入镜像的脚本在仓库里是 `files/etc/uci-defaults/99-ax6000-defaults`、
 `files/etc/init.d/ledinterval`、`files/etc/init.d/ax6000-firstboot-guard`、
@@ -68,7 +68,7 @@ OpenWrt 会在 uci-defaults 脚本成功执行一次后删除它；普通 sysupg
 所以 uci-defaults 里的 `/etc/init.d/mtk_smp enable` 是**兜底**，不是修复「包白装」——
 目的是上游改包结构 / 去掉 init 时不至于静默失去 IRQ/RPS 调优。
 
-### `/etc/sysctl.conf` 的 4 个键
+### `/etc/sysctl.conf` 的 6 个键
 
 上游 `package/base-files/files/etc/sysctl.conf` 明确写着：自定义项应写这个文件，
 不要写 `/etc/sysctl.d/*`（该目录默认不备份、`10-default.conf` 升级时会被覆盖）。
@@ -76,8 +76,10 @@ OpenWrt 会在 uci-defaults 脚本成功执行一次后删除它；普通 sysupg
 
 | 键 | 值 | 类别 | 目的 | 回退 |
 |---|---|---|---|---|
-| `net.netfilter.nf_conntrack_max` | `65536` | 性能 + 稳定性 | HNAT / 多连接 / P2P 下内核按内存自动算的上限偏小，表满会丢新建连接 | `16384` 或删行 |
-| `net.core.netdev_max_backlog` | `16384` | 性能 | 四核 + RPS 下小包突发的收包队列，减少 rx 丢包 | `1000` |
+| `net.netfilter.nf_conntrack_max` | `131072` | 性能 + 稳定性 | HNAT / 多连接 / P2P 下内核按内存自动算的上限偏小，表满会丢新建连接 | `65536` |
+| `net.core.netdev_max_backlog` | `32768` | 性能 | 四核 + RPS 下小包突发的收包队列，减少 rx 丢包 | `16384` |
+| `net.core.rmem_max` | `4194304` | 性能 | 抬高 socket 收缓冲上限，给大吞吐场景留余量 | `212992` |
+| `net.core.wmem_max` | `4194304` | 性能 | 同上（发送方向） | `212992` |
 | `net.netfilter.nf_conntrack_tcp_timeout_established` | `86400` | 稳定性 | 僵死 ESTABLISHED 从内核默认 5 天缩到 1 天，加速表项回收（活跃连接会被刷新） | `432000` |
 | `vm.swappiness` | `100` | 稳定性 | 已装 `zram-swap`，优先把匿名页换到压缩内存，降低 OOM 概率 | `60` |
 
@@ -86,20 +88,20 @@ OpenWrt 会在 uci-defaults 脚本成功执行一次后删除它；普通 sysupg
 **刻意不加** `kernel.panic_on_oops`：上游 `10-default.conf` 已有 `kernel.panic=3`，
 `config-6.12` 也有 `CONFIG_MEDIATEK_WATCHDOG=y`；把 oops 也变 panic 会让 WiFi 驱动偶发异常变成循环重启。
 
-**代价**：`nf_conntrack_max=65536` 约多占 20-30MB 内存；内存吃紧就调小。
+**代价**：`nf_conntrack_max=131072` 在 512MB 内存下约 40-50MB，属于激进档；内存吃紧改回 `65536`。
 
-### 可选 CPU 调频档位
+### CPU 调频档位
 
-`config-6.12` 同时编了 `CONFIG_CPU_FREQ_GOV_PERFORMANCE=y` 和默认
-`CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y`。`ax6000-perf`（`START=98`）在每次 boot 读
+`config-6.12` 同时编了 `CONFIG_CPU_FREQ_GOV_PERFORMANCE=y` 和
+`CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y`。`ax6000-perf`（`START=98`）每次 boot 读
 `ax6000.perf.cpu_governor`，白名单只允许 `schedutil|performance|ondemand|conservative|powersave|userspace`，
-非法值回落 `schedutil`；sysfs 不可写时静默跳过。默认 `schedutil` 等于不改上游行为。
+非法值回落 `schedutil`；sysfs 不可写时静默跳过。**默认 `performance`**（满频，降突发延迟，温度/功耗上升）。
 
 ```sh
-uci set ax6000.perf.cpu_governor='performance'   # 更低提频延迟，温度/功耗上升
+uci set ax6000.perf.cpu_governor='schedutil'     # 想省电降温
 uci commit ax6000 && /etc/init.d/ax6000-perf start
 
-uci set ax6000.perf.cpu_governor='schedutil'     # 回退
+uci set ax6000.perf.cpu_governor='performance'   # 回到默认满频
 uci commit ax6000 && /etc/init.d/ax6000-perf start
 ```
 

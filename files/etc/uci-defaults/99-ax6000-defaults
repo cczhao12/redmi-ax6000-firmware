@@ -143,12 +143,12 @@ fi
 # 上游若改成不带 init / 去掉自动 enable，SMP 调优也不会静默失效。
 [ -x /etc/init.d/mtk_smp ] && /etc/init.d/mtk_smp enable || true
 
-# 可选性能档位：默认沿用上游 schedutil（CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y）。
-# 想降低突发流量下的提频延迟，把 ax6000.perf.cpu_governor 改成 performance；
-# 代价是温度和功耗上升，改回 schedutil 即可回退。仅当该 UCI 段不存在时初始化。
+# 性能档位：默认 performance（MT7986A 四核满频，降低突发流量的提频延迟）。
+# 代价是温度和功耗上升；想省电/降温把 ax6000.perf.cpu_governor 改成 schedutil。
+# 仅当该 UCI 段不存在时初始化，之后不会被升级覆盖。
 if ! uci_has ax6000.perf; then
   uci -q set ax6000.perf='perf'
-  uci -q set ax6000.perf.cpu_governor='schedutil'
+  uci -q set ax6000.perf.cpu_governor='performance'
   uci -q commit ax6000
 fi
 
@@ -165,9 +165,13 @@ sysctl_set() {
 }
 
 # 性能：HNAT + 多连接场景下内核按内存自动算的 conntrack 上限偏小，表满会丢新建连接。
-sysctl_set net.netfilter.nf_conntrack_max 65536
+# 512MB 内存下 131072 条约 40-50MB，属于激进档；内存吃紧可改回 65536。
+sysctl_set net.netfilter.nf_conntrack_max 131072
 # 性能：四核 + RPS 下的收包队列，减少小包突发时 rx 丢包。
-sysctl_set net.core.netdev_max_backlog 16384
+sysctl_set net.core.netdev_max_backlog 32768
+# 性能：抬高 socket 收发缓冲上限，给大吞吐/低延迟场景留余量。
+sysctl_set net.core.rmem_max 4194304
+sysctl_set net.core.wmem_max 4194304
 # 稳定性：僵死 ESTABLISHED 条目从内核默认的 5 天缩到 1 天，加速表项回收（活跃连接会被刷新）。
 sysctl_set net.netfilter.nf_conntrack_tcp_timeout_established 86400
 # 稳定性：已装 zram-swap，优先把匿名页换到压缩内存，降低 OOM 概率。

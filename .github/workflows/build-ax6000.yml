@@ -424,7 +424,7 @@ jobs:
           ls -lh
 
       - name: 上传固件产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ax6000-mtkuboot-${{ steps.src.outputs.sha }}
           path: out/
@@ -432,7 +432,7 @@ jobs:
 
       - name: 上传编译日志
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-log-${{ steps.src.outputs.sha }}
           path: openwrt/build.log

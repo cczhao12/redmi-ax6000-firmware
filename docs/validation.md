@@ -3,21 +3,24 @@
 > 本文件按时间顺序保留多次验证结果。**读之前先看是哪一轮**：`3d34af8` 的 defconfig 结果
 > 不能代表 `3892b02` 之后的 config；本轮 review 修订只做了静态验证，没有完整编译和上机。
 
-## 2026-11-13 — 上游固定为 fork + pinned（待验证）
+## 2026-11-14 — 上游固定为 fork + pinned 到同步后的最新（当前）
 
 | 项 | 值 |
 |---|---|
 | 上游 repo | `cczhao12/immortalwrt-mt798x-rebase`（自己的 fork） |
-| 上游 SHA | `9f397975c7b47ce6986a6e39529d2f72fd5c729d`（fork 的 `25.12` HEAD，也是 run #5 用的版本） |
-| feeds | 2026-11-06 时刻 5 个 SHA：`packages fa25995d` / `luci c38e5665` / `routing 48c80803` / `telephony c58ec5a6` / `video 094bf58d` |
+| 上游 SHA | `dde141f9202df9bd11a44550730a122c45eae256`（2026-11-13 用 `merge-upstream` 同步，fast-forward，与 chasey-dev 一致） |
+| feeds | 同一提交时刻 `until=2026-11-13T15:18:45Z` 锁定：`packages fa25995d` / `luci 8f18275b` / `routing 625f9d84` / `telephony c58ec5a6` / `video 094bf58d` |
 | 编译硬化 | `CHECK_FORMAT_SECURITY` / `RELRO_FULL` / `CCACHE` 全开 |
-| 包改动 | 精简 + 移除 WOL + `hnat-detect`/`mtk-smp` + 禁 `kmod-nft-compat` / `kmod-nf-ipt` |
-| fullcone | `kmod-nft-fullcone` 不可用：`9f397975` 没有这个 kmod 包（`firewall4` 在该版本也不依赖它） |
+| 包改动 | 精简 + 移除 WOL + `hnat-detect`/`mtk-smp` + 禁 `kmod-nft-compat` / `kmod-nf-ipt` + `kmod-nft-fullcone=y` |
 
-这个组合 = 唯一完整出过包的 run #5 上游 + 本仓库的 config 修复。**尚未完整编译验证**：
-run #12 验证的是 `dde141f9` + 11-13 feeds 那套，与本组合不同。
+与前几轮的区别：上游和 feeds 都钉死，不再随 `25.12` HEAD 漂移。**尚未完整编译验证**。
+失败排查顺序：先看 `-j1 V=s` 的具体报错 → `hardening=off` 排除硬化 → 回退 config 改动。
 
-升级路径：sync fork → `upstream_ref=<新SHA>` 测试构建 → 成功后改 `upstream.lock` 并复核 `feeds.lock`。
+升级路径：sync fork → `upstream_ref=<新SHA>` 测试构建 → 成功后改 `upstream.lock` 并用新时刻重锁 `feeds.lock`。
+
+## 2026-11-13 — 曾短暂钉 9f397975 + feeds 11-06（已放弃）
+
+那个组合等价于 run #5 的上游，但用户要求用同步后的最新，所以改为上面的 `dde141f9`。
 
 ## 2026-11-13 — 上游跟最新（曾用，已切换）
 

@@ -4,12 +4,12 @@
 
 构建输入彻底固定：
 
-- `SOURCE_REPO`：`chasey-dev/immortalwrt-mt798x-rebase` → `cczhao12/immortalwrt-mt798x-rebase`
-  （自己的 fork，`25.12` HEAD 正好是 `9f397975`，即唯一完整出包那次用的上游）
+- `SOURCE_REPO`：`chasey-dev/immortalwrt-mt798x-rebase` → `cczhao12/immortalwrt-mt798x-rebase`（自己的 fork）
 - `upstream_ref` 默认值：空（跟最新）→ `pinned`（读 `config/upstream.lock`）
-- `config/feeds.lock`：11-13 → 11-06（run #5 触发时刻），与 `9f397975` 配套
-- `config/ax6000.config`：`kmod-nft-fullcone` 改为不选中（`9f397975` 里没有这个 kmod 包，
-  `firewall4` 在该版本也不依赖它）
+- `config/upstream.lock`：钉 `dde141f9`（2026-11-13 同步 fork 后的 `25.12` HEAD，与 chasey-dev 完全一致）
+- `config/feeds.lock`：按同一提交时刻 `until=2026-11-13T15:18:45Z` 重新锁，
+  得到 `luci 8f18275b` / `routing 625f9d84` / `packages fa25995d` / `telephony c58ec5a6` / `video 094bf58d`
+- `config/ax6000.config`：恢复 `kmod-nft-fullcone=y`（`dde141f9` 起有这个 kmod 包）
 - `pr-check.yml`：改为读 `upstream.lock`，与默认构建同一套输入
 - `upstream-watch.yml`：改为「对比 fork 分支与 lock，不一致就开 issue 提醒升级」，
   并补上 `checkout`（之前没有 checkout，读不到仓库文件）

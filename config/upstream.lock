@@ -1,12 +1,13 @@
 # 钉死的上游 commit。workflow 默认 upstream_ref=pinned 时读这一行。
 #
-# 这个 SHA 是 cczhao12/immortalwrt-mt798x-rebase（自己的 fork）的 25.12 HEAD，
-# 也是 2026-11-06 Actions run #5（714b898）用 cczhao12/redmi-ax6000-firmware 的
-# 唯一一次完整出包时使用的上游版本。配套 config/feeds.lock 的 11-06 时刻 SHA。
+# 这个 SHA 是 cczhao12/immortalwrt-mt798x-rebase（自己的 fork）的 25.12 HEAD。
+# 2026-11-13 通过 GitHub "Sync fork"（merge-upstream，fast-forward）与
+# chasey-dev/immortalwrt-mt798x-rebase 同步，两者此刻完全一致。
+# 配套 config/feeds.lock 用同一提交时刻（until=2026-11-13T15:18:45Z）的 feeds HEAD。
 #
 # 升级流程：
-#   1. 在 GitHub 上 sync 自己的 fork（或 push 某个上游 commit）
-#   2. workflow_dispatch 用 upstream_ref=<新 SHA> 做测试构建（只产 artifact）
-#   3. 完整编译成功后再改这里，并同步检查 config/feeds.lock、config/ax6000.config
+#   1. 在 GitHub 上 sync fork（或把某个上游 commit push 进去）
+#   2. workflow_dispatch 用 upstream_ref=<新 SHA> 做测试构建（只产 artifact、不发 Release）
+#   3. 完整编译成功、上机正常后改这里，并用 until=<新提交时刻> 重新锁 config/feeds.lock
 # 格式: 一行 40 位小写 commit SHA
-9f397975c7b47ce6986a6e39529d2f72fd5c729d
+dde141f9202df9bd11a44550730a122c45eae256

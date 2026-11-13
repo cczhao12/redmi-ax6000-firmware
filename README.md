@@ -149,11 +149,23 @@ head -1 /proc/interrupts
 
 ### 手动触发
 
-- `upstream_ref` **留空**：解析 `25.12` 分支最新 HEAD，正式构建、成功后自动发 Release（默认）。
-- `upstream_ref=pinned`：用 `config/upstream.lock` 里已验证出过包的 `9f397975`。
-- `upstream_ref` 填 **40 位小写 SHA**：按该 SHA 做**测试构建**，只上传 artifact、不发 Release。
+- `upstream_ref=pinned`（**默认**）：用 `config/upstream.lock` 钉死的 `9f397975`（自己 fork 的 `25.12` HEAD），构建输入固定、可复现。
+- `upstream_ref` 填 **40 位小写 SHA**：按该 SHA 做**测试构建**，只上传 artifact、不发 Release。**升级上游走这个入口。**
+- `upstream_ref` 留空：解析 fork 的 `25.12` 最新 HEAD（只在刚 sync 完想试探时用，不推荐）。
 - `hardening`：`on`（默认，`CHECK_FORMAT_SECURITY`/`RELRO_FULL`/`CCACHE` 全开）/ `off`（临时关这三项定位失败）。
 - `jobs` 填 1-64，留空取 `nproc`。
+
+### 上游来源与升级
+
+上游用的是**你自己的 fork** `cczhao12/immortalwrt-mt798x-rebase`，不是 `chasey-dev/` 原库。
+好处：上游改名/删库/强推都不影响你，以后想打 patch 也直接在这里改。
+
+升级流程：
+
+1. 在 GitHub 上 sync fork（或把某个上游 commit push 进去）；
+2. `workflow_dispatch` 用 `upstream_ref=<新 SHA>` 做测试构建（只产 artifact、不发 Release）；
+3. 完整编译成功、上机观察正常后，改 `config/upstream.lock`，并同步检查 `config/feeds.lock` 与 `config/ax6000.config`；
+4. `upstream-watch.yml` 每周只做一件事：对比 fork 分支和 lock，**不一致就开 issue 提醒可以升级**，不改构建、不自动发布。
 
 ### push tag
 
@@ -180,9 +192,9 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 默认就是最激进的输入，所以失败并不意外。**不用改代码**，按下面顺序二分：
 
 1. 先看「编译错误摘要」和 `make -j1 V=s` 的输出，定位到具体出错的 `.c`/`.ko`。
-2. 用 `hardening=off` 重跑：这一步能直接判定是不是 `CHECK_FORMAT_SECURITY`/`RELRO_FULL`/`CCACHE` 的问题。
-3. 若还失败，用 `upstream_ref=pinned` 重跑：判定是上游新 HEAD 的问题还是本仓库配置的问题。
-4. 仍失败就用 `upstream_ref` 填某个中间 SHA 逐步逼近，或把出错包对应的 `CONFIG_MTK_*`/包选项临时关掉。
+2. 用 `hardening=off` 重跑：判定是不是 `CHECK_FORMAT_SECURITY`/`RELRO_FULL`/`CCACHE` 的问题。
+3. 默认已是 pinned（`9f397975`，唯一完整出包过的输入），所以优先怀疑本仓库的 config 改动，而不是上游。
+4. 仍失败就逐个回退 config 改动（例如临时恢复 `kmod-nft-compat`），每次重跑。
 5. 结论回写 `docs/validation.md`。
 
 > 这些开关只是失败后的排查手段，**不改变默认的激进配置**。

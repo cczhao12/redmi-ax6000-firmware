@@ -3,7 +3,28 @@
 > 本文件按时间顺序保留多次验证结果。**读之前先看是哪一轮**：`3d34af8` 的 defconfig 结果
 > 不能代表 `3892b02` 之后的 config；本轮 review 修订只做了静态验证，没有完整编译和上机。
 
-## 2026-11-13 — 激进最终版（当前仓库状态）
+## 2026-11-13 — 上游固定为 fork + pinned（待验证）
+
+| 项 | 值 |
+|---|---|
+| 上游 repo | `cczhao12/immortalwrt-mt798x-rebase`（自己的 fork） |
+| 上游 SHA | `9f397975c7b47ce6986a6e39529d2f72fd5c729d`（fork 的 `25.12` HEAD，也是 run #5 用的版本） |
+| feeds | 2026-11-06 时刻 5 个 SHA：`packages fa25995d` / `luci c38e5665` / `routing 48c80803` / `telephony c58ec5a6` / `video 094bf58d` |
+| 编译硬化 | `CHECK_FORMAT_SECURITY` / `RELRO_FULL` / `CCACHE` 全开 |
+| 包改动 | 精简 + 移除 WOL + `hnat-detect`/`mtk-smp` + 禁 `kmod-nft-compat` / `kmod-nf-ipt` |
+| fullcone | `kmod-nft-fullcone` 不可用：`9f397975` 没有这个 kmod 包（`firewall4` 在该版本也不依赖它） |
+
+这个组合 = 唯一完整出过包的 run #5 上游 + 本仓库的 config 修复。**尚未完整编译验证**：
+run #12 验证的是 `dde141f9` + 11-13 feeds 那套，与本组合不同。
+
+升级路径：sync fork → `upstream_ref=<新SHA>` 测试构建 → 成功后改 `upstream.lock` 并复核 `feeds.lock`。
+
+## 2026-11-13 — 上游跟最新（曾用，已切换）
+
+| 项 | 值 |
+|---|---|
+| 上游 | 每次解析 `chasey-dev/...` `25.12` HEAD；run #7/#10 为 `daa7695e`，run #11/#12 为 `dde141f9` |
+| feeds | 2026-11-13 的 5 个 SHA |
 
 **不做保守回退**：`3d34af8`/`3892b02` 的编译侧改动全部保留，并且进一步关闭调试项。
 

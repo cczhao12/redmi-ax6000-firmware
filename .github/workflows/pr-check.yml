@@ -40,22 +40,22 @@ jobs:
             python3 python3-distutils python3-setuptools bc patch rsync unzip \
             zlib1g-dev file wget curl
 
-      - name: 拉取上游 25.12 最新 HEAD（与 build 默认一致）
+      - name: 拉取 upstream.lock 钉死的上游 SHA（与 build 默认一致）
         env:
-          SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
-          UPSTREAM_BRANCH: '25.12'
+          SOURCE_REPO: cczhao12/immortalwrt-mt798x-rebase
+          UPSTREAM_LOCK_FILE: config/upstream.lock
         run: |
           set -euo pipefail
-          SHA=$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | awk '{print $1}')
+          SHA=$(grep -Ev '^[[:space:]]*(#|$)' "$UPSTREAM_LOCK_FILE" | head -1 | awk '{print $1}')
           printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' \
-            || { echo "无法解析上游 ${UPSTREAM_BRANCH} HEAD" >&2; exit 1; }
+            || { echo "$UPSTREAM_LOCK_FILE 里没有合法 40 位 SHA" >&2; exit 1; }
           git init openwrt
           cd openwrt
           git remote add origin "https://github.com/${SOURCE_REPO}.git"
           git fetch --depth 1 origin "$SHA"
           git checkout --detach FETCH_HEAD
           [ "$(git rev-parse HEAD)" = "$SHA" ]
-          echo "PR 校验基于上游 ${SHA}"
+          echo "PR 校验基于钉死上游 ${SHA}"
 
       - name: 更新 feeds 并按 lock 锁定
         run: |

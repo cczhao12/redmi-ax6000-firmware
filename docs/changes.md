@@ -8,8 +8,8 @@
 
 | 项目 | 原仓库 / 失败版 `3892b02` | 激进最终版 |
 |---|---|---|
-| 上游 | 每次解析 `25.12` HEAD | **相同**：每次解析 `25.12` 最新 HEAD；`upstream_ref=pinned` 时用 `config/upstream.lock` |
-| feeds | 2026-11-13 的 5 个 SHA | **相同** |
+| 上游 | 每次解析 `25.12` HEAD | **改为自己 fork + 钉死**：`cczhao12/immortalwrt-mt798x-rebase` 的 `9f397975`（run #5 用的版本），默认 `upstream_ref=pinned` |
+| feeds | 2026-11-13 的 5 个 SHA | 回到 **2026-11-06**（run #5 触发时刻），与 `9f397975` 配套 |
 | 编译硬化 | `CCACHE` / `CHECK_FORMAT_SECURITY` / `RELRO_FULL` 全开 | **相同**（全部保留） |
 | `kmod-nft-fullcone` | 显式 `=y` | **相同**，显式 `=y`；不进 `required-packages.txt`，避免 pinned 模式误红 |
 | 厂商调试 | WARP_DBG / MEMORY_LEAK_DBG / ATE / AIR_MONITOR / ICAP / SPECTRUM 全开 | **全部关闭**（减小驱动体积、去掉运行时调试开销） |

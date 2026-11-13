@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: '上游：留空=跟 25.12 最新 HEAD（正式发布）；pinned=用 config/upstream.lock；40 位 SHA=测试构建（不发 Release）'
+        description: '上游：pinned=用 config/upstream.lock（默认）；40 位 SHA=测试构建（不发 Release）；留空=跟 25.12 最新（不推荐）'
         required: false
-        default: ''
+        default: 'pinned'
       hardening:
         description: '编译硬化：on（默认）/ off（临时关 format-security+RELRO+ccache，仅用于定位失败）'
         required: false
@@ -28,11 +28,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
-  # 默认跟 25.12 分支最新 HEAD（激进模式）。需要复现或回退时用 upstream_ref：
-  #   留空   -> 解析 25.12 最新 HEAD，正式构建并发 Release
-  #   pinned -> 用 config/upstream.lock 里已验证出过包的 SHA（run #5 / 714b898）
+  # 用你自己的 fork：上游改名/删库/强推都影响不到你，以后想打 patch 也直接在这里改。
+  SOURCE_REPO: cczhao12/immortalwrt-mt798x-rebase
+  # 默认 pinned：用 config/upstream.lock 里已验证出过包的 SHA，构建输入固定、可复现。
+  #   pinned -> 用 upstream.lock（默认，正式构建并发 Release）
   #   40 位  -> 用指定 SHA 做测试构建，只产 artifact，不发 Release
+  #   留空   -> 解析 25.12 分支最新 HEAD（只在 fork 刚 sync、想试探时用）
   UPSTREAM_BRANCH: '25.12'
   UPSTREAM_LOCK_FILE: config/upstream.lock
   TZ: Asia/Shanghai

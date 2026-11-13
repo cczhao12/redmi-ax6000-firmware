@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-13 — 上游改为自己的 fork + 默认 pinned
+
+构建输入彻底固定：
+
+- `SOURCE_REPO`：`chasey-dev/immortalwrt-mt798x-rebase` → `cczhao12/immortalwrt-mt798x-rebase`
+  （自己的 fork，`25.12` HEAD 正好是 `9f397975`，即唯一完整出包那次用的上游）
+- `upstream_ref` 默认值：空（跟最新）→ `pinned`（读 `config/upstream.lock`）
+- `config/feeds.lock`：11-13 → 11-06（run #5 触发时刻），与 `9f397975` 配套
+- `config/ax6000.config`：`kmod-nft-fullcone` 改为不选中（`9f397975` 里没有这个 kmod 包，
+  `firewall4` 在该版本也不依赖它）
+- `pr-check.yml`：改为读 `upstream.lock`，与默认构建同一套输入
+- `upstream-watch.yml`：改为「对比 fork 分支与 lock，不一致就开 issue 提醒升级」，
+  并补上 `checkout`（之前没有 checkout，读不到仓库文件）
+
+效果：同一份仓库代码每次构建都拿相同的上游 + feeds，产物可复现；
+升级需要手动 sync fork → 测试构建 → 改 lock，不会悄悄漂移。
+
 ## 2026-11-13 — 修复 `ip_tables.ko` 缺失（两轮）
 
 第一轮修法（`c128027`）用 `CONFIG_KERNEL_NETFILTER_XTABLES=m` / `CONFIG_KERNEL_IP_NF_IPTABLES=m`

@@ -16,6 +16,8 @@ luci-i18n-ttyd-zh-cn
 luci-theme-argon
 
 kmod-mediatek_hnat
+hnat-detect
+mtk-smp
 kmod-mt_wifi
 kmod-warp
 kmod-conninfra
@@ -34,6 +36,7 @@ libblkid
 openssh-sftp-server
 tc-tiny
 ethtool
+ip-bridge
 iw
 iwinfo-ucode
 wireless-regdb

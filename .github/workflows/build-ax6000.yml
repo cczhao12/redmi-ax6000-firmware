@@ -265,6 +265,7 @@ jobs:
           fi
 
           /etc/init.d/ledinterval enable
+          /etc/init.d/ax6000-firstboot-guard enable
           rm -f /etc/config/upnpd
           exit 0
           EOF
@@ -339,14 +340,14 @@ jobs:
             || { echo "LuCI 未被显式选中，终止"; exit 1; }
 
           echo "--- 必需包 ---"
-          while IFS= read -r p; do
+          while IFS= read -r p || [ -n "$p" ]; do
             [ -n "$p" ] || continue
             [ "$p" = "${p#\#}" ] || continue
             grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "缺少 ${p}"; exit 1; }
           done < ../config/required-packages.txt
 
           echo "--- 应被移除的包 ---"
-          while IFS= read -r p; do
+          while IFS= read -r p || [ -n "$p" ]; do
             [ -n "$p" ] || continue
             [ "$p" = "${p#\#}" ] || continue
             if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then echo "不应包含 ${p}"; exit 1; fi

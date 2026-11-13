@@ -42,7 +42,7 @@ jobs:
           - 或等上游恢复后再跑默认构建。
           EOF
 
-          EXISTING=$(gh issue list --search "$TITLE" --json number --jq '.[0].number' || true)
+          EXISTING=$(gh issue list --search "$TITLE" --json number --jq '.[0].number // empty' || true)
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file /tmp/upstream-body.md
           else

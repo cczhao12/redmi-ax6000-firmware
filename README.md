@@ -13,7 +13,7 @@
 - `CONFIG_PKG_CHECK_FORMAT_SECURITY=y`、`CONFIG_PKG_RELRO_FULL=y`、`CONFIG_CCACHE=y`
 - 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y`
 - 包精简、移除 WOL、`hnat-detect`/`mtk-smp`、BBR 走 cubic
-- CPU 调频默认 `performance`
+- CPU 调频默认 `schedutil`（7x24 家用不常驻满频；需要时手动切 `performance`）
 
 **代价必须说清**：这就是 run #7 失败（`ERROR: package/kernel/linux failed to build.`）的编译输入，
 成功不保证。但失败时**不用改代码**就能定位或回退：
@@ -87,7 +87,7 @@ MTK 厂商调试选项（WARP/ATE/AIR_MONITOR/SPECTRUM/ICAP、`WARP_MEMORY_LEAK_
 | 首启管理面 | root 无口令时 disable `ttyd` + `dropbear`，并 disable 所有 `wifi-device` |
 | WAN 管理面 | `block-wan-mgmt`：`src=wan`、`family=any`、`proto=tcp`、`dest_port=22 80 7681`、`target=REJECT` |
 | LED | 状态灯/网络灯 `235/255/0`，`netdev` + `tx/rx`，interval 150ms |
-| CPU 调频 | `performance`（默认满频，降突发延迟；可改回 `schedutil` 省电降温） |
+| CPU 调频 | `schedutil`（上游默认，按负载调频）；需要时可手动切 `performance` |
 | 其他 | WOL 不装；`zram-swap`、`luci-app-autoreboot`、`openssh-sftp-server` 保留 |
 
 > 已手改的值不会被覆盖。例外：`block-wan-mgmt`、首启空密码保护、`/etc/sysctl.conf` 的 4 个键每次升级检查补齐。
@@ -118,8 +118,8 @@ OpenWrt 打包时会自动 enable 包内 init 脚本，uci-defaults 再 `enable`
 
 ### 3. 可选 CPU 调频档位
 
-`ax6000-perf` 每次 boot 读 `ax6000.perf.cpu_governor`，**默认 `performance`**（MT7986A 满频，降延迟，
-温度/功耗上升）；想省电降温就改回 `schedutil`：
+`ax6000-perf` 每次 boot 读 `ax6000.perf.cpu_governor`，**默认 `schedutil`**（上游默认，按负载调频）。
+不建议 7x24 常驻 `performance`：被动散热下夏季更容易触发 thermal 降频，反而带来抖动；需要时可临时切换：
 
 ```sh
 uci set ax6000.perf.cpu_governor='performance'; uci commit ax6000; /etc/init.d/ax6000-perf start

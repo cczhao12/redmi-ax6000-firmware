@@ -95,13 +95,16 @@ OpenWrt 会在 uci-defaults 脚本成功执行一次后删除它；普通 sysupg
 `config-6.12` 同时编了 `CONFIG_CPU_FREQ_GOV_PERFORMANCE=y` 和
 `CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y`。`ax6000-perf`（`START=98`）每次 boot 读
 `ax6000.perf.cpu_governor`，白名单只允许 `schedutil|performance|ondemand|conservative|powersave|userspace`，
-非法值回落 `schedutil`；sysfs 不可写时静默跳过。**默认 `performance`**（满频，降突发延迟，温度/功耗上升）。
+非法值回落 `schedutil`；sysfs 不可写时静默跳过。**默认 `schedutil`**（上游默认，按负载调频）。
+
+> 不建议 7x24 常驻 `performance`：被动散热下夏季更容易触发 thermal 降频，反而带来抖动，
+> 且千兆宽带下 `schedutil` 的提频延迟基本感知不到。
 
 ```sh
-uci set ax6000.perf.cpu_governor='schedutil'     # 想省电降温
+uci set ax6000.perf.cpu_governor='performance'   # 需要时临时满频
 uci commit ax6000 && /etc/init.d/ax6000-perf start
 
-uci set ax6000.perf.cpu_governor='performance'   # 回到默认满频
+uci set ax6000.perf.cpu_governor='schedutil'     # 回退到默认
 uci commit ax6000 && /etc/init.d/ax6000-perf start
 ```
 

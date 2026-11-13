@@ -143,12 +143,13 @@ fi
 # 上游若改成不带 init / 去掉自动 enable，SMP 调优也不会静默失效。
 [ -x /etc/init.d/mtk_smp ] && /etc/init.d/mtk_smp enable || true
 
-# 性能档位：默认 performance（MT7986A 四核满频，降低突发流量的提频延迟）。
-# 代价是温度和功耗上升；想省电/降温把 ax6000.perf.cpu_governor 改成 schedutil。
+# 性能档位：默认 schedutil（上游默认，按负载调频，功耗与温度可控）。
+# 7x24 家用路由不适合常驻满频：被动散热下夏季更容易触发 thermal 降频，反而抖动；
+# 且千兆宽带下 schedutil 的提频延迟基本感知不到。需要时可手动切 performance。
 # 仅当该 UCI 段不存在时初始化，之后不会被升级覆盖。
 if ! uci_has ax6000.perf; then
   uci -q set ax6000.perf='perf'
-  uci -q set ax6000.perf.cpu_governor='performance'
+  uci -q set ax6000.perf.cpu_governor='schedutil'
   uci -q commit ax6000
 fi
 

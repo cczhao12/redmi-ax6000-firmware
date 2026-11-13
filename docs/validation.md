@@ -15,7 +15,7 @@
 | fullcone | 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y` |
 | 厂商调试 | WARP_DBG / MEMORY_LEAK_DBG / ATE / AIR_MONITOR / ICAP / SPECTRUM 全关 |
 | 内核调试 | `KERNEL_DEBUG_INFO` / `DEBUG_MISC` / `LOCK_DEBUGGING_SUPPORT` / `PCI_DEBUG` 全关 |
-| 性能 | CPU governor 默认 `performance`；conntrack `131072`、backlog `32768`、rmem/wmem 4MB |
+| 性能 | CPU governor 默认 `schedutil`（7x24 不常驻满频）；conntrack `131072`、backlog `32768`、rmem/wmem 4MB |
 
 **已知风险**：这正是 run #7 失败的输入（`ERROR: package/kernel/linux failed to build.`），
 再加上关闭厂商调试和内核调试的新变量。关调试项可能触发驱动编译错误（某些宏被代码引用），

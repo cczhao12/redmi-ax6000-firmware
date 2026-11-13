@@ -12,7 +12,7 @@
 - 关闭厂商调试/诊断：`WARP_DBG_SUPPORT`、`WARP_MEMORY_LEAK_DBG`、`MTK_ATE_SUPPORT`、
   `MTK_AIR_MONITOR`、`MTK_ICAP_SUPPORT`、`MTK_SPECTRUM_SUPPORT`
 - 关闭内核调试：`KERNEL_DEBUG_INFO`、`KERNEL_DEBUG_MISC`、`KERNEL_LOCK_DEBUGGING_SUPPORT`、`KERNEL_PCI_DEBUG`
-- CPU 调频默认 `performance`
+- CPU 调频默认 `schedutil`（按反馈：7x24 家用不常驻满频，需要时手动切 `performance`）
 - sysctl 提到激进档：conntrack `131072`、backlog `32768`、`rmem_max`/`wmem_max` 4MB
 
 保留：包精简、移除 WOL、`hnat-detect`/`mtk-smp`、BBR cubic、全部运行时脚本与工程化。

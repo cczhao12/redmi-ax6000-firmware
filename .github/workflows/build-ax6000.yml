@@ -228,6 +228,14 @@ jobs:
           cd ..
           sh scripts/validate-config.sh openwrt/.config
 
+          # run #10 的失败点：kmod-nft-compat 依赖 kmod-nf-ipt，而 ip_tables.ko 因内核
+          # 符号没开而缺失；这个错误要到编译末期才报。这里 defconfig 后立刻拦住。
+          grep -q '^CONFIG_PACKAGE_kmod-nf-ipt=y' openwrt/.config \
+            || { echo "::error::kmod-nf-ipt 未选中，ip_tables.ko 会缺失"; exit 1; }
+          grep -qE '^CONFIG_KERNEL_(IP_NF_IPTABLES|NETFILTER_XTABLES)=m' openwrt/.config \
+            || { echo "::error::CONFIG_KERNEL_IP_NF_IPTABLES/NETFILTER_XTABLES 被 defconfig 丢弃，ip_tables.ko 会缺失"; exit 1; }
+          echo "kmod-nf-ipt / ip_tables 依赖已确认"
+
           echo "--- 目标机型 ---"
           grep -E '^CONFIG_TARGET_DEVICE_.*=y' openwrt/.config
 

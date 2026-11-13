@@ -1,6 +1,35 @@
 # Changelog
 
-## 2026-11-13 — 激进最终版（当前版本：不做保守回退）
+## 2026-11-13 — 修复 run #10 编译失败：`ip_tables.ko` 缺失
+
+run #10（`85f6532`，上游 `daa7695e`）在 `编译` step 失败，真实报错（由 `-j1 V=s` 重试给出）：
+
+```
+ERROR: module '.../net/ipv4/netfilter/ip_tables.ko' is missing.
+make[3]: *** [modules/netfilter.mk:62: .../kmod-nf-ipt-6.12.112-r1.apk] Error 1
+```
+
+根因链条（**不是**关调试项导致的，是 config 与上游内核配置的矛盾）：
+
+1. `config/ax6000.config` 有 `CONFIG_PACKAGE_kmod-nft-compat=y`（`714b898` 起就有）；
+2. 上游 `package/kernel/linux/modules/netfilter.mk` 里 `kmod-nft-compat` 的
+   `DEPENDS:=+kmod-nft-core +kmod-nf-ipt`（`9f397975` 与 `daa7695e` 完全相同）；
+3. `kmod-nf-ipt` 的 `FILES` 要求 `net/ipv4/netfilter/ip_tables.ko` 与 `net/netfilter/x_tables.ko`；
+4. 但上游 `target/linux/generic/config-6.12` 里
+   `# CONFIG_IP_NF_IPTABLES is not set`、`# CONFIG_NETFILTER_XTABLES is not set`，
+   两个 `.ko` 根本没编出来，于是打包 `kmod-nf-ipt` 时 `exit 1`。
+
+修复：
+
+- 显式 `CONFIG_PACKAGE_kmod-nf-ipt=y`；
+- 显式 `CONFIG_KERNEL_NETFILTER_XTABLES=m`、`CONFIG_KERNEL_IP_NF_IPTABLES=m`；
+- workflow 在 `make defconfig` 后立刻断言 `CONFIG_PACKAGE_kmod-nf-ipt=y` 与
+  `CONFIG_KERNEL_IP_NF_IPTABLES=m`，避免再跑 50 分钟才发现。
+
+> run #7（`3892b02`）也停在 `ERROR: package/kernel/linux failed to build.`，但那次没有
+> `V=s` 日志，无法确认是否同一根因。本轮的 `make -j1 V=s` 重试才拿到确切错误行。
+
+## 2026-11-13 — 激进最终版（不做保守回退）
 
 上一版「平衡最终版」为成功率回退了 4 项编译输入，被指出仍保守。本版把这 4 项全部恢复，
 默认就跑最激进的组合：

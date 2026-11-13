@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: '上游 ref 覆盖（留空 = 使用 UPSTREAM_SHA 钉死的版本；可填分支/tag/commit）'
+        description: '测试构建：40 位 commit SHA（留空 = 跟进上游 25.12 最新，正式发布）'
         required: false
         default: ''
       jobs:
@@ -15,8 +15,9 @@ on:
     tags:
       - 'v*'
 
+# 最小权限：构建只读，发布 job 单独申请 contents: write
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: build-ax6000-${{ github.ref }}
@@ -24,21 +25,23 @@ concurrency:
 
 env:
   SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
-  # ── 钉死的上游提交 ──────────────────────────────────────────
-  # 当前: 2026-10-23 "Merge ImmortalWrt Source"
-  # 升级上游时只改这一行，这样每次编出来的内核 / 驱动 / WiFi 固件才是同一个东西。
-  # 想临时试新版，用 workflow_dispatch 的 source_ref 覆盖，不要动这里。
-  UPSTREAM_SHA: 9f397975c7b47ce6986a6e39529d2f72fd5c729d
-  # 构建成功后是否自动发布 Release。
-  # true  = 每次手动/定时构建成功，自动归档成 tag 为 v<日期>-<上游sha前7位> 的 Release
-  # false = 只产 artifact，需要发布时再自己打 v* tag
-  AUTO_RELEASE: 'true'
+  # ── 默认跟进上游最新的稳定分支 ──────────────────────────────
+  # 每次 run 先解析 refs/heads/25.12 的 HEAD，再按解析出的 40 位 SHA 拉取；
+  # 不在仓库里写死 commit，避免“仓库是旧版本、只是改了脚本”。
+  # 需要复现某次构建时，workflow_dispatch 的 source_ref 填 40 位 SHA 即可。
+  UPSTREAM_BRANCH: '25.12'
   TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 355
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.src.outputs.sha }}
+      release: ${{ steps.src.outputs.release }}
+      tag: ${{ steps.meta.outputs.tag }}
 
     steps:
       - name: 释放磁盘空间
@@ -50,121 +53,218 @@ jobs:
 
       - name: 检出构建配置
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: 安装编译依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison gawk g++ \
             gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-            python3-distutils rsync unzip zlib1g-dev file wget curl
+            python3-distutils python3-setuptools bc patch swig ccache \
+            rsync unzip zlib1g-dev file wget curl
 
       - name: 拉取上游源码
         id: src
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          REF='${{ github.event.inputs.source_ref }}'
+          set -euo pipefail
+          REF="${SOURCE_REF:-}"
           if [ -n "$REF" ]; then
+            if ! printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "source_ref 必须是 40 位小写 commit SHA（测试构建），或者留空跟进最新"
+              exit 1
+            fi
             TARGET="$REF"
-            echo "使用手动指定的 ref: $TARGET"
+            RELEASE=false
+            echo "测试构建: ${TARGET}（不会发布 Release）"
           else
-            TARGET="$UPSTREAM_SHA"
-            echo "使用钉死的上游版本: $TARGET"
+            TARGET=$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | awk '{print $1}')
+            if ! printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "无法解析上游 ${UPSTREAM_BRANCH} 的最新 commit"
+              exit 1
+            fi
+            RELEASE=true
+            echo "正式构建: 上游 ${UPSTREAM_BRANCH} 最新 ${TARGET}"
           fi
+
           git init openwrt
           cd openwrt
           git remote add origin "https://github.com/${SOURCE_REPO}.git"
-          # GitHub 允许对可达 commit 做 --depth 1 浅拉取
           git fetch --depth 1 origin "$TARGET"
           git checkout --detach FETCH_HEAD
           SHA=$(git rev-parse HEAD)
-          # 钉死模式下断言实际拉到的就是那个提交，防止上游改历史/拼错 sha 后默默编了别的东西
-          if [ -z "$REF" ] && [ "$SHA" != "$UPSTREAM_SHA" ]; then
-            echo "拉取到的 $SHA 与钉死的 $UPSTREAM_SHA 不一致，终止"
+          if [ "$SHA" != "$TARGET" ]; then
+            echo "拉取到的 $SHA 与目标 $TARGET 不一致，终止"
             exit 1
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
           echo "上游: ${SOURCE_REPO}@${SHA}"
           git log -1 --format='%ci  %s'
 
-      - name: 缓存下载的源码包
+      - name: 计算版本号
+        id: meta
+        env:
+          TAG_REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ steps.src.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${TAG_REF}" != "${TAG_REF#refs/tags/v}" ]; then
+            TAG="$REF_NAME"
+          else
+            TAG="v$(date -u +%Y.%m.%d)-$(echo "$SHA" | cut -c1-7)-$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "版本: $TAG"
+
+      - name: 缓存下载源码和 ccache
         uses: actions/cache@v4
         with:
-          path: openwrt/dl
-          key: dl-${{ steps.src.outputs.sha }}
+          path: |
+            openwrt/dl
+            openwrt/.ccache
+          key: dl-${{ steps.src.outputs.sha }}-${{ hashFiles('config/feeds.lock', 'config/ax6000.config') }}
           restore-keys: |
+            dl-${{ steps.src.outputs.sha }}-
             dl-
 
-      - name: 更新 feeds
+      - name: 更新 feeds 并按 lock 锁定
         run: |
+          set -euo pipefail
           cd openwrt
+          mkdir -p ../out
           ./scripts/feeds update -a
+          if [ -f ../config/feeds.lock ]; then
+            while read -r name sha; do
+              [ -n "$name" ] || continue
+              [ "$name" = "${name#\#}" ] || continue
+              [ -d "feeds/$name/.git" ] || { echo "feeds/$name 不存在"; exit 1; }
+              git -C "feeds/$name" fetch --depth 1 origin "$sha"
+              git -C "feeds/$name" checkout --detach FETCH_HEAD
+              actual=$(git -C "feeds/$name" rev-parse HEAD)
+              [ "$actual" = "$sha" ] || { echo "feed $name 锁定失败: $actual != $sha"; exit 1; }
+            done < ../config/feeds.lock
+          fi
           ./scripts/feeds install -a
+          : > ../out/feeds.lock
+          for d in feeds/*; do
+            [ -d "$d/.git" ] || continue
+            printf '%s %s\n' "$(basename "$d")" "$(git -C "$d" rev-parse HEAD)" >> ../out/feeds.lock
+          done
+          cat ../out/feeds.lock
 
-      - name: 注入默认 LAN 地址、主机名、双灯颜色与 interval 脚本
+      - name: 注入默认配置、构建信息和首启保护
         run: |
+          set -euo pipefail
+
           mkdir -p openwrt/package/base-files/files/etc/uci-defaults
           cat > openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults <<'EOF'
           #!/bin/sh
           cur="$(uci -q get network.lan.ipaddr)"
-          case "$cur" in
-          ""|192.168.1.1)
-              uci -q get network.lan >/dev/null || {
-                  uci set network.lan='interface'
-                  uci set network.lan.device='br-lan'
-                  uci set network.lan.proto='static'
-                  uci set network.lan.netmask='255.255.255.0'
-                  uci set network.lan.ip6assign='60'
-              }
-              uci set network.lan.ipaddr='192.168.6.1'
-              uci commit network
-              ;;
-          esac
+          proto="$(uci -q get network.lan.proto)"
+          if [ -z "$cur" ] || [ "$cur" = "192.168.1.1" ]; then
+            if [ -z "$proto" ] || [ "$proto" = "static" ]; then
+              if ! uci -q get network.lan >/dev/null; then
+                uci -q set network.lan='interface'
+                uci -q set network.lan.device='br-lan'
+                uci -q set network.lan.proto='static'
+                uci -q set network.lan.netmask='255.255.255.0'
+              fi
+              [ -n "$(uci -q get network.lan.ip6assign)" ] || uci -q set network.lan.ip6assign='60'
+              uci -q set network.lan.ipaddr='192.168.6.1'
+              uci -q commit network
+            fi
+          fi
 
-          uci set system.@system[0].hostname='redmi-ax6000'
-          uci set system.status_led='led'
-          uci set system.status_led.name='Status'
-          uci set system.status_led.sysfs='rgb:status'
-          uci set system.status_led.trigger='netdev'
-          uci set system.status_led.dev='rax0'
-          uci -q delete system.status_led.mode
-          uci add_list system.status_led.mode='tx'
-          uci add_list system.status_led.mode='rx'
-          uci set system.status_led.default='1'
-          uci set system.status_led.color_red='235'
-          uci set system.status_led.color_green='255'
-          uci set system.status_led.color_blue='0'
+          hostname="$(uci -q get system.@system[0].hostname)"
+          if [ -z "$hostname" ] || [ "$hostname" = "OpenWrt" ] || [ "$hostname" = "ImmortalWrt" ]; then
+            uci set system.@system[0].hostname='redmi-ax6000'
+          fi
 
-          # 第二颗灯珠（右侧），与左侧同色同触发器
-          uci set system.network_led='led'
-          uci set system.network_led.name='Network'
-          uci set system.network_led.sysfs='rgb:network'
-          uci set system.network_led.trigger='netdev'
-          uci set system.network_led.dev='rax0'
-          uci -q delete system.network_led.mode
-          uci add_list system.network_led.mode='tx'
-          uci add_list system.network_led.mode='rx'
-          uci set system.network_led.default='1'
-          uci set system.network_led.color_red='235'
-          uci set system.network_led.color_green='255'
-          uci set system.network_led.color_blue='0'
+          if ! uci -q get system.status_led >/dev/null; then
+            uci set system.status_led='led'
+            uci set system.status_led.name='Status'
+            uci set system.status_led.sysfs='rgb:status'
+            uci set system.status_led.trigger='netdev'
+            uci set system.status_led.dev='rax0'
+            uci -q delete system.status_led.mode
+            uci add_list system.status_led.mode='tx'
+            uci add_list system.status_led.mode='rx'
+            uci set system.status_led.default='1'
+            uci set system.status_led.color_red='235'
+            uci set system.status_led.color_green='255'
+            uci set system.status_led.color_blue='0'
+          fi
+
+          if ! uci -q get system.network_led >/dev/null; then
+            uci set system.network_led='led'
+            uci set system.network_led.name='Network'
+            uci set system.network_led.sysfs='rgb:network'
+            uci set system.network_led.trigger='netdev'
+            uci set system.network_led.dev='rax0'
+            uci -q delete system.network_led.mode
+            uci add_list system.network_led.mode='tx'
+            uci add_list system.network_led.mode='rx'
+            uci set system.network_led.default='1'
+            uci set system.network_led.color_red='235'
+            uci set system.network_led.color_green='255'
+            uci set system.network_led.color_blue='0'
+          fi
           uci commit system
 
-          # 2.4G 固定到 ch1（boot 已先生成无线配置，此处按 band 匹配）
           for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
-              [ "$(uci -q get wireless.$s.band)" = "2g" ] && uci set wireless.$s.channel='1'
+            [ -n "$(uci -q get wireless.$s.country)" ] || uci -q set wireless.$s.country='CN'
+            if [ "$(uci -q get wireless.$s.band)" = "2g" ]; then
+              ch="$(uci -q get wireless.$s.channel)"
+              if [ -z "$ch" ] || [ "$ch" = "auto" ]; then
+                uci -q set wireless.$s.channel='1'
+              fi
+            fi
           done
-          uci commit wireless
+          uci -q commit wireless
 
-          # uhttpd 不绑定具体 IP：绑死 IP 后一旦改网段/切 AP 模式，bind 失败会让整个
-          # LuCI 起不来。默认监听 0.0.0.0:80 是安全的——wan zone 的 input 默认 REJECT，
-          # 外网访问不到后台。
-          uci -q delete uhttpd.main.listen_http
-          uci add_list uhttpd.main.listen_http='0.0.0.0:80'
-          uci add_list uhttpd.main.listen_http='[::]:80'
-          uci commit uhttpd
+          listen="$(uci -q get uhttpd.main.listen_http)"
+          if [ -z "$listen" ] || [ "$listen" = "0.0.0.0:80" ]; then
+            uci -q delete uhttpd.main.listen_http
+            uci -q add_list uhttpd.main.listen_http='0.0.0.0:80'
+            uci -q add_list uhttpd.main.listen_http='[::]:80'
+            uci -q commit uhttpd
+          fi
 
-          # netdev 的 interval 每次开机/led restart 都会回到 50ms，uci 没有对应选项
+          uci -q get turboacc.config >/dev/null || uci -q set turboacc.config=turboacc
+          [ -n "$(uci -q get turboacc.config.fastpath)" ] || uci -q set turboacc.config.fastpath='mediatek_hnat'
+          [ -n "$(uci -q get turboacc.config.fastpath_mh_bind_rate)" ] || uci -q set turboacc.config.fastpath_mh_bind_rate='30'
+          [ -n "$(uci -q get turboacc.config.fastpath_mh_update_nfct)" ] || uci -q set turboacc.config.fastpath_mh_update_nfct='0'
+          [ -n "$(uci -q get turboacc.config.tcpcca)" ] || uci -q set turboacc.config.tcpcca='cubic'
+          uci -q commit turboacc
+
+          [ -n "$(uci -q get firewall.@defaults[0].fullcone)" ] || uci -q set firewall.@defaults[0].fullcone='1'
+          [ -n "$(uci -q get firewall.@defaults[0].fullcone6)" ] || uci -q set firewall.@defaults[0].fullcone6='0'
+          uci -q commit firewall
+
+          if ! uci -q show firewall | grep -q "name='block-wan-mgmt'"; then
+            uci add firewall rule >/dev/null
+            uci set firewall.@rule[-1].name='block-wan-mgmt'
+            uci set firewall.@rule[-1].src='wan'
+            uci set firewall.@rule[-1].proto='tcp'
+            uci set firewall.@rule[-1].dest_port='22 80 7681'
+            uci set firewall.@rule[-1].target='REJECT'
+            uci commit firewall
+          fi
+
+          if [ "$(awk -F: '/^root:/{print length($2)}' /etc/shadow)" = "0" ]; then
+            [ -x /etc/init.d/ttyd ] && /etc/init.d/ttyd disable
+            for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+              uci -q set wireless.$s.disabled='1'
+            done
+            uci -q commit wireless
+          fi
+
           /etc/init.d/ledinterval enable
-
           rm -f /etc/config/upnpd
           exit 0
           EOF
@@ -174,92 +274,154 @@ jobs:
           cat > openwrt/package/base-files/files/etc/init.d/ledinterval <<'EOF'
           #!/bin/sh /etc/rc.common
           START=97
-
           boot() {
-          	for d in /sys/class/leds/rgb:status /sys/class/leds/rgb:network; do
-          		[ -d "$d" ] && echo 150 > "$d/interval"
-          	done
+            for d in /sys/class/leds/rgb:status /sys/class/leds/rgb:network; do
+              [ -d "$d" ] && echo 150 > "$d/interval"
+            done
           }
-
           start() {
-          	boot
+            boot
           }
           EOF
           chmod 0755 openwrt/package/base-files/files/etc/init.d/ledinterval
+
+          cat > openwrt/package/base-files/files/etc/init.d/ax6000-firstboot-guard <<'EOF'
+          #!/bin/sh /etc/rc.common
+          START=99
+          boot() {
+            if [ "$(awk -F: '/^root:/{print length($2)}' /etc/shadow)" = "0" ]; then
+              [ -x /etc/init.d/ttyd ] && /etc/init.d/ttyd disable
+              for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+                uci -q set wireless.$s.disabled='1'
+              done
+              uci -q commit wireless
+              wifi down 2>/dev/null || true
+            fi
+          }
+          start() {
+            boot
+          }
+          EOF
+          chmod 0755 openwrt/package/base-files/files/etc/init.d/ax6000-firstboot-guard
+
+          SHA='${{ steps.src.outputs.sha }}'
+          mkdir -p openwrt/package/base-files/files/etc
+          {
+            echo "UPSTREAM_REPO=${SOURCE_REPO}"
+            echo "UPSTREAM_SHA=${SHA}"
+            echo "REPO_SHA=${GITHUB_SHA}"
+            echo "CONFIG_SHA256=$(sha256sum config/ax6000.config | cut -d' ' -f1)"
+            echo "FEEDS_LOCK_SHA256=$(sha256sum out/feeds.lock | cut -d' ' -f1)"
+            echo "BUILD_DATE=$(date -u +%FT%TZ)"
+          } > openwrt/package/base-files/files/etc/ax6000-build-info
+
           echo "--- uci-defaults ---"
           cat openwrt/package/base-files/files/etc/uci-defaults/99-ax6000-defaults
           echo "--- ledinterval ---"
           cat openwrt/package/base-files/files/etc/init.d/ledinterval
+          echo "--- firstboot guard ---"
+          cat openwrt/package/base-files/files/etc/init.d/ax6000-firstboot-guard
+          echo "--- build info ---"
+          cat openwrt/package/base-files/files/etc/ax6000-build-info
 
       - name: 应用并校验配置
         run: |
+          set -euo pipefail
           cp config/ax6000.config openwrt/.config
           cd openwrt
           make defconfig
 
           echo "--- 目标机型 ---"
           grep -E '^CONFIG_TARGET_DEVICE_.*=y' .config
-          # 机型必须被真正选中：上游改名 / 分支切换时 defconfig 会静默丢掉这一项，
-          # 然后按 MULTI_PROFILE 编全部机型，白跑三小时才在收集产物时失败。
           grep -q '^CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-mtkuboot=y' .config \
             || { echo "机型 xiaomi_redmi-router-ax6000-mtkuboot 未被选中，终止"; exit 1; }
-          # LuCI 必须是显式选中的，不能靠上游默认值兜底
           grep -q '^CONFIG_PACKAGE_luci=y' .config \
-            || { echo "LuCI 未被显式选中，会编出没有网页的固件，终止"; exit 1; }
+            || { echo "LuCI 未被显式选中，终止"; exit 1; }
 
           echo "--- 必需包 ---"
-          for p in \
-            luci-app-autoreboot luci-i18n-autoreboot-zh-cn \
-            luci-app-ttyd luci-app-wol \
-            luci-app-turboacc-mtk luci-app-mtwifi-cfg \
-            luci-theme-argon kmod-mediatek_hnat kmod-mt_wifi kmod-zram zram-swap \
-            kmod-leds-ws2812b; do
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            [ "$p" = "${p#\#}" ] || continue
             grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "缺少 ${p}"; exit 1; }
-          done
+          done < ../config/required-packages.txt
+
           echo "--- 应被移除的包 ---"
-          for p in smartdns luci-app-smartdns luci-app-eqos-mtk mtkhqos_util \
-                   miniupnpd luci-app-upnp luci-i18n-upnp-zh-cn; do
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            [ "$p" = "${p#\#}" ] || continue
             if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then echo "不应包含 ${p}"; exit 1; fi
-          done
+          done < ../config/forbidden-packages.txt
+
           test -f package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
             || { echo "缺少默认配置脚本"; exit 1; }
           test -f package/base-files/files/etc/init.d/ledinterval \
             || { echo "缺少 LED interval 脚本"; exit 1; }
+          test -f package/base-files/files/etc/init.d/ax6000-firstboot-guard \
+            || { echo "缺少首启保护脚本"; exit 1; }
+          test -f package/base-files/files/etc/ax6000-build-info \
+            || { echo "缺少构建信息"; exit 1; }
           grep -q "system.network_led" package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
             || { echo "默认脚本缺少第二颗灯配置"; exit 1; }
+          grep -q "tcpcca='cubic'" package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
+            || { echo "默认脚本缺少 TCP CC 设置"; exit 1; }
+          grep -q "fullcone='1'" package/base-files/files/etc/uci-defaults/99-ax6000-defaults \
+            || { echo "默认脚本缺少 fullcone 设置"; exit 1; }
           echo "配置校验通过"
+
+          echo "--- config 与 make defconfig 的差异（仅警告）---"
+          grep '^CONFIG_' ../config/ax6000.config | sort > /tmp/config.repo
+          grep '^CONFIG_' .config | sort > /tmp/config.build
+          if ! diff -q /tmp/config.repo /tmp/config.build >/dev/null; then
+            echo "::warning::config/ax6000.config 与 make defconfig 输出有差异，建议回写"
+            diff -u /tmp/config.repo /tmp/config.build | head -200 || true
+          fi
 
       - name: 预下载源码
         run: |
+          set -euo pipefail
           cd openwrt
-          make -j8 download || make -j8 download || make -j1 download
+          make -j"$(nproc)" download || make -j"$(nproc)" download || make -j1 download
 
       - name: 编译
+        timeout-minutes: 300
+        env:
+          JOBS: ${{ inputs.jobs }}
         run: |
           set -o pipefail
           cd openwrt
-          J='${{ github.event.inputs.jobs }}'
-          [ -n "$J" ] || J=$(nproc)
+          J="${JOBS:-$(nproc)}"
           echo "并行数: $J"
-          # 并行编译偶发竞态，失败后降级单线程重试一次（注意：若首轮已耗尽 355min，重试会撞 timeout）
-          make -j"$J" 2>&1 | tee build.log || {
-            echo "并行编译失败，降级单线程重试"
-            make -j1 V=s 2>&1 | tee -a build.log
-          }
+          # 不再做全量 -j1 重试：355 分钟上限内基本做不完，失败时保留日志下一轮用 ccache 重试。
+          make -j"$J" 2>&1 | tee build.log
 
-      - name: 收集固件
+      - name: 收集固件和元数据
+        env:
+          SHA: ${{ steps.src.outputs.sha }}
         run: |
+          set -euo pipefail
           mkdir -p out
-          cp openwrt/bin/targets/mediatek/filogic/*ax6000-mtkuboot*sysupgrade.bin out/ || {
-            echo "未找到 sysupgrade 产物，实际产物如下："
-            ls -l openwrt/bin/targets/mediatek/filogic/ || true
-            exit 1
-          }
+          cp openwrt/bin/targets/mediatek/filogic/*ax6000-mtkuboot* out/
+          cp openwrt/bin/targets/mediatek/filogic/*.manifest out/ 2>/dev/null || true
+          cp openwrt/bin/targets/mediatek/filogic/config.buildinfo out/ 2>/dev/null || true
+          cp openwrt/bin/targets/mediatek/filogic/profiles.json out/ 2>/dev/null || true
+          cp openwrt/bin/targets/mediatek/filogic/sha256sums out/ 2>/dev/null || true
           cd out
-          sha256sum * > SHA256SUMS.txt
+          {
+            echo "UPSTREAM_REPO=${SOURCE_REPO}"
+            echo "UPSTREAM_SHA=${SHA}"
+            echo "REPO_SHA=${GITHUB_SHA}"
+            echo "CONFIG_SHA256=$(sha256sum ../config/ax6000.config | cut -d' ' -f1)"
+            echo "BUILD_DATE=$(date -u +%FT%TZ)"
+            echo "FEEDS_LOCK_SHA256=$(sha256sum feeds.lock | cut -d' ' -f1)"
+            echo "KERNEL=$(grep -m1 '^CONFIG_KERNEL_VERSION=' ../openwrt/.config || true)"
+            echo "WIFI_DRIVER=$(grep -m1 '^CONFIG_MTK_MT_WIFI_DRIVER_VERSION_' ../openwrt/.config || true)"
+            echo "WIFI_FIRMWARE=$(grep -m1 '^CONFIG_MTK_MT_WIFI_FIRMWARE_PATH_MT7986=' ../openwrt/.config || true)"
+            echo "IMAGES:"
+            ls -1 ./*.bin
+          } > BUILD_INFO.txt
+          sha256sum ./* > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
           ls -lh
-          echo "SOURCE=${SOURCE_REPO}@${{ steps.src.outputs.sha }}" > BUILD_INFO.txt
-          date -u >> BUILD_INFO.txt
 
       - name: 上传固件产物
         uses: actions/upload-artifact@v4
@@ -276,31 +438,50 @@ jobs:
           path: openwrt/build.log
           if-no-files-found: ignore
 
+  release:
+    needs: build
+    if: needs.build.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: 下载固件产物
+        uses: actions/download-artifact@v4
+        with:
+          name: ax6000-mtkuboot-${{ needs.build.outputs.sha }}
+          path: out
+
       - name: 发布 Release
-        if: success() && (env.AUTO_RELEASE == 'true' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+          SHA: ${{ needs.build.outputs.sha }}
         run: |
-          # 打 tag 触发的构建沿用 tag 名；手动 / 定时触发的构建按“日期 + 上游版本”自动生成
-          if [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/v}" ]; then
-            TAG="${GITHUB_REF_NAME}"
-            echo "由 tag 触发，沿用 ${TAG}"
-          else
-            SHA='${{ steps.src.outputs.sha }}'
-            TAG="v$(date -u +%Y.%m.%d)-$(echo "$SHA" | cut -c1-7)"
-            echo "构建成功，自动归档为 ${TAG}"
-          fi
+          set -euo pipefail
+          test -n "$TAG"
           {
-            echo "上游: ${SOURCE_REPO}@${{ steps.src.outputs.sha }}"
-            echo "构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
-            echo "触发方式: ${GITHUB_EVENT_NAME}"
-            echo "运行记录: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "## 变更"
+            echo "- 上游: ${SOURCE_REPO}@${SHA}"
+            echo "- 本仓库: ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+            echo "- 配置 SHA256: $(grep '^CONFIG_SHA256=' out/BUILD_INFO.txt | cut -d= -f2)"
+            echo "- 构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "- 触发方式: ${GITHUB_EVENT_NAME}"
+            echo "- 运行记录: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            echo "## 校验"
+            echo '```'
+            echo "sha256sum -c SHA256SUMS.txt"
+            echo '```'
+            echo ""
+            echo "## 刷机"
+            echo "见 README 的刷机/救砖章节；普通 sysupgrade 保留 /etc/config。"
           } > release-notes.md
           cat release-notes.md
-          # 幂等：同一个 tag 的 Release 已存在时只覆盖产物，不报 "already exists" 把构建染红
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release ${TAG} 已存在，改为覆盖上传产物"
+            echo "Release ${TAG} 已存在，覆盖同一 commit 的产物"
             gh release upload "$TAG" out/* --clobber
+            gh release edit "$TAG" --notes-file release-notes.md
           else
             gh release create "$TAG" out/* \
               --title "AX6000 ${TAG}" \

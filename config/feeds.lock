@@ -1,0 +1,8 @@
+# 2026-11-13 锁定的 feeds 提交（openwrt-25.12 分支 HEAD）
+# 格式: <feeds 目录名> <40 位 commit SHA>
+# workflow 会在 feeds update 后逐个 fetch/checkout 到这些 SHA，再 feeds install。
+packages fa25995d74a720c1c98bf6265d3dd8b4eb620d1f
+luci 8f18275bb510818c501e4b124f872b6d30573d8a
+routing 625f9d8446807708bab4eef26cdc44692164818a
+telephony c58ec5a6703966dcccb53d0919698c8aba3a9ef5
+video 094bf58da6682f895255a35a84349a79dab4bf95

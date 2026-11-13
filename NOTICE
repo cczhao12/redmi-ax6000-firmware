@@ -1,0 +1,17 @@
+# NOTICE
+
+本仓库的构建脚本、配置和文档以 GPL-2.0-or-later 发布（完整文本见 `LICENSE`）。
+
+固件二进制包含以下第三方组件，各自遵循其原始许可证：
+
+- **ImmortalWrt / OpenWrt**：GPL-2.0 及其他许可证；源码见上游仓库。
+- **Linux kernel**：GPL-2.0；源码由上游构建时拉取。
+- **MediaTek `mt_wifi` / WARP / 相关 firmware binary**：来自上游 `chasey-dev/immortalwrt-mt798x-rebase`，可能包含厂商 binary/firmware blob；再分发条款请自行复核上游和厂商许可证。
+- **LuCI / packages / routing / telephony / video feeds**：各包自带 LICENSE；见 `feeds/<name>/` 和包元数据。
+- **luci-theme-argon**：按其上游许可证。
+- **OpenSSH / Dropbear / dnsmasq / nftables / zram 等**：各上游许可证。
+
+本仓库不声称拥有上述第三方代码或 binary 的版权。  
+如果你要公开分发编译产物，请先确认所有厂商 binary/firmware 的再分发条款；必要时移除相关闭源组件或改为不公开分发。
+
+本固件按“现状”提供，不提供任何明示或暗示担保；刷机风险自负。

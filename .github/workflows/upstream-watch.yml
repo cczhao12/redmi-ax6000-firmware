@@ -1,0 +1,50 @@
+name: Upstream health check
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检查上游 25.12 是否可达
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: chasey-dev/immortalwrt-mt798x-rebase
+          UPSTREAM_BRANCH: '25.12'
+        run: |
+          set -euo pipefail
+          NEW=$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | awk '{print $1}')
+          if printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "上游 ${UPSTREAM_BRANCH} 最新: $NEW"
+            echo "build workflow 默认会跟进这个 HEAD；这里只做可达性监控，不为每个新 commit 开 issue。"
+            exit 0
+          fi
+
+          TITLE="上游 ${UPSTREAM_BRANCH} 分支不可达"
+          cat > /tmp/upstream-body.md <<EOF
+          上游仓库: https://github.com/${SOURCE_REPO}
+          分支: \`${UPSTREAM_BRANCH}\`
+          \`git ls-remote\` 没有拿到 40 位 commit SHA。
+
+          影响:
+          - build workflow 的默认“跟进最新”会在这里失败。
+          - 需要检查上游仓库是否改名/删分支/网络异常。
+
+          临时绕过:
+          - workflow_dispatch 里填一个已知可用的 40 位 \`source_ref\` 先构建；
+          - 或等上游恢复后再跑默认构建。
+          EOF
+
+          EXISTING=$(gh issue list --search "$TITLE" --json number --jq '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file /tmp/upstream-body.md
+          else
+            gh issue create --title "$TITLE" --body-file /tmp/upstream-body.md
+          fi

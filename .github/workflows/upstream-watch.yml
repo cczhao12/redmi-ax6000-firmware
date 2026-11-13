@@ -15,7 +15,7 @@ jobs:
     steps:
       # 需要读 config/upstream.lock，所以必须先 checkout。
       - name: 检出仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 

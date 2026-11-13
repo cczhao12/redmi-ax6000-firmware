@@ -1,6 +1,18 @@
 # Changelog
 
-## 2026-11-13 — 修复 run #10 编译失败：`ip_tables.ko` 缺失
+## 2026-11-13 — 修复 `ip_tables.ko` 缺失（两轮）
+
+第一轮修法（`c128027`）用 `CONFIG_KERNEL_NETFILTER_XTABLES=m` / `CONFIG_KERNEL_IP_NF_IPTABLES=m`
+去补内核符号，**无效**：OpenWrt 的 `CONFIG_KERNEL_*` 在 `make defconfig` 时按 bool 归一化，
+`=m` 会被直接丢掉。run #11 在「应用并校验配置」的提前断言处就红了（约 40 秒，没白跑 50 分钟）。
+
+最终修法：**禁掉 `kmod-nft-compat`**。已核对上游 Makefile：`firewall4` 的 DEPENDS 只有
+`+kmod-nft-core +kmod-nft-fib +kmod-nft-offload +kmod-nft-nat +kmod-nft-fullcone +nftables-json +ucode*`，
+`nftables` 只有 `+kmod-nft-core +libnftnl`，**都不依赖 nft-compat**；fw4 生成 native nft 表达式，
+不需要 xtables 兼容层。所以 `# CONFIG_PACKAGE_kmod-nft-compat is not set`，并把它和
+`kmod-nf-ipt` 一起写进 `forbidden-packages.txt`，断言兜底。
+
+
 
 run #10（`85f6532`，上游 `daa7695e`）在 `编译` step 失败，真实报错（由 `-j1 V=s` 重试给出）：
 

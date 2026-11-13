@@ -20,6 +20,9 @@ etherwake
 wol
 
 luci-theme-bootstrap-mod
+# nft-compat 会拉 kmod-nf-ipt -> 需要 ip_tables.ko，而上游内核配置没编它；fw4 用不到
+kmod-nft-compat
+kmod-nf-ipt
 kmod-ata-core
 kmod-scsi-core
 kmod-fs-vfat

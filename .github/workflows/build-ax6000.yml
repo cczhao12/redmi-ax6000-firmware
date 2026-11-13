@@ -447,7 +447,7 @@ jobs:
       contents: write
     steps:
       - name: 下载固件产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ax6000-mtkuboot-${{ needs.build.outputs.sha }}
           path: out

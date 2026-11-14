@@ -55,3 +55,21 @@ fw4 与 `nftables` 都不依赖它，所以现在直接禁掉。若以后要恢�
 
 > 教训：smoke 这类"提前编译"只有在能便宜地准备好依赖链时才划算；
 > OpenWrt 的包依赖内核 `.config`，这个前置本身就是 world 的大部分工作量。
+
+## 6. 不要关 mt_wifi 的厂商调试宏（ICAP / SPECTRUM / AIR_MONITOR / ATE / WARP_DBG）
+
+run #18 实测：关闭 \CONFIG_MTK_ICAP_SUPPORT\ / \CONFIG_MTK_SPECTRUM_SUPPORT\ 后，
+\mt_wifi/embedded/common/cmm_info.c\ 编译失败：
+
+\cmm_info.c:19700: error: unknown type name \'PHY_ICS_START_T\'
+cmm_info.c:19713: error: \'ICS_MODE\' undeclared
+cmm_info.c:19751: error: \'ICS_PARTITION\' undeclared
+cmm_info.c:19789: error: \'PHY_ICS_MODE\' undeclared
+\
+原因：\ICS_*\ 枚举与 \PHY_ICS_START_T\ 类型只在 ICAP / SPECTRUM / PHY_ICS 宏打开时才有定义
+（源码注释：\case ICS_MODE: /* 0:icap mode, 1:spectrum mode, 2:phy ics mode */\），
+而 \cmm_info.c\ 的使用处没有被同一个 \#ifdef\ 包住。
+
+**结论**：这 6 个厂商调试项（\WARP_DBG\ / \WARP_MEMORY_LEAK_DBG\ / \ATE\ / \AIR_MONITOR\ /
+\ICAP\ / \SPECTRUM\）必须保持上游默认 \=y\。关掉换不来可见收益，却会直接打断编译。
+\CONFIG_MTK_MGMT_TXPWR_CTRL=y\ 仍然需要 \patches/mt_wifi/042-fix-mgmt-txpwr.patch\，两者独立。

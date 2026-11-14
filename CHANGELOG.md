@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-11-14 — 修复 mt_wifi 的 ICS_* 编译错误（恢复厂商调试项）
+
+run #18 在 \编译\ 71 分钟后失败在 \package/mtk/drivers/mt_wifi\，但错误已不是
+\wtbl_update_pwr_offset\（**补丁生效了**），而是 \cmm_info.c\ 里一串 \ICS_*\ 未声明：
+
+\error: unknown type name \'PHY_ICS_START_T\'
+error: \'ICS_MODE\' undeclared
+error: \'PHY_ICS_MODE\' undeclared
+\
+根因：之前为“减小驱动体积”关掉了 \CONFIG_MTK_ICAP_SUPPORT\ / \CONFIG_MTK_SPECTRUM_SUPPORT\，
+而 \ICS_*\ 的定义只在它们打开时才存在，使用处没有对应的 \#ifdef\。
+
+修复：6 个厂商调试项（\WARP_DBG\ / \WARP_MEMORY_LEAK_DBG\ / \ATE\ / \AIR_MONITOR\ /
+\ICAP\ / \SPECTRUM\）全部恢复成上游默认 \=y\，等于放弃这项优化——收益本来就很小，
+代价却是直接编译失败。详见 \docs/known-issues.md\。
+
+保留：驱动补丁（\MGMT_TXPWR_CTRL\ 仍需要）、禁 \kmod-nft-compat\、包精简、
+运行时脚本、tag pinned 修复、失败包单独 \V=s\ 兜底。
+
 ## 2026-11-14 — 修复 mt_wifi 驱动编译失败 + 流程整改
 
 ### 根因

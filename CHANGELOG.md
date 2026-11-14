@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-11-14 — 修复 WiFi 温度显示缺失：加回 wireless-tools
+## 2026-11-14 — 加回 wireless-tools（修 WiFi 温度）与 tcpdump
 
 **症状**：LuCI 概览只剩 `CPU: 41.4°C`，`WiFi: xx°C/xx°C` 消失。
 
@@ -15,6 +15,12 @@
 - 记录到 `docs/known-issues.md` 第 7 条。
 
 > 临时可用 `apk add wireless-tools` 恢复，但它装在 overlay，刷机/恢复出厂后丢失。
+
+**同时加回 `tcpdump`**（约 800KB，含 `libpcap`）：纯排障工具，
+`tcpdump -i br-lan -n host <ip>` / `port 53` / `port 67 or 68`。
+注意 HNAT 加速的连接会绕过协议栈，抓不到；排障时临时
+`uci set turboacc.config.fastpath='none'` + restart。
+已从 `forbidden-packages.txt` 移除 `tcpdump`/`libpcap`/`libcap-ng`，并写入 `required-packages.txt`。
 
 ## 2026-11-14 — 修复 mt_wifi 的 ICS_* 编译错误（恢复厂商调试项）
 

@@ -46,3 +46,5 @@ ca-certificates
 openssl-util
 # WiFi 温度显示依赖 iwpriv：/sbin/tempinfo 用 iwpriv <if> stat 读 CurrentTemperature
 wireless-tools
+# 排障：抓包工具，需要时 tcpdump -i br-lan -n
+tcpdump

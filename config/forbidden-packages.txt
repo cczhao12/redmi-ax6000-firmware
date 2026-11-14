@@ -35,9 +35,6 @@ ebtables
 kmod-ebtables
 kmod-ebtables-ipv4
 kmod-ebtables-ipv6
-tcpdump
-libpcap
-libcap-ng
 htop
 nano
 libncurses

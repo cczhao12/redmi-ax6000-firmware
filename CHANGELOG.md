@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-14 — 修复 WiFi 温度显示缺失：加回 wireless-tools
+
+**症状**：LuCI 概览只剩 `CPU: 41.4°C`，`WiFi: xx°C/xx°C` 消失。
+
+**根因**：`/sbin/tempinfo`（由 `ubus call luci getTempInfo` 调用）在 `mediatek/filogic`
+分支用 `iwpriv <if> stat` 读 `CurrentTemperature`，而 `iwpriv` 属于 `wireless-tools`——
+3d34af8 把它精简掉了，导致 `wifi_temp` 为空、界面自动省略该段。
+
+**修复**：
+
+- `CONFIG_PACKAGE_wireless-tools=y`，并加入 `config/required-packages.txt` 硬断言；
+- 从 `config/forbidden-packages.txt` 移除；
+- 记录到 `docs/known-issues.md` 第 7 条。
+
+> 临时可用 `apk add wireless-tools` 恢复，但它装在 overlay，刷机/恢复出厂后丢失。
+
 ## 2026-11-14 — 修复 mt_wifi 的 ICS_* 编译错误（恢复厂商调试项）
 
 run #18 在 \编译\ 71 分钟后失败在 \package/mtk/drivers/mt_wifi\，但错误已不是

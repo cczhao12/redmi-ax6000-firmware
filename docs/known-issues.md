@@ -73,3 +73,30 @@ cmm_info.c:19789: error: \'PHY_ICS_MODE\' undeclared
 **结论**：这 6 个厂商调试项（\WARP_DBG\ / \WARP_MEMORY_LEAK_DBG\ / \ATE\ / \AIR_MONITOR\ /
 \ICAP\ / \SPECTRUM\）必须保持上游默认 \=y\。关掉换不来可见收益，却会直接打断编译。
 \CONFIG_MTK_MGMT_TXPWR_CTRL=y\ 仍然需要 \patches/mt_wifi/042-fix-mgmt-txpwr.patch\，两者独立。
+
+## 7. WiFi 温度显示依赖 wireless-tools（iwpriv）
+
+LuCI 概览页的 `Temperature` 来自 `ubus call luci getTempInfo`，其实现是：
+
+```
+getTempInfo  ->  popen('/sbin/tempinfo')
+```
+
+`/sbin/tempinfo` 在 `mediatek/filogic` 分支调用 `get_mtwifi_temp()`：
+
+```sh
+temp="$(iwpriv ${ifname} stat | awk '/CurrentTemperature/ {printf("%d°C", $3)}')"
+```
+
+**必须要有 `iwpriv`（属于 `wireless-tools`）**，否则 `wifi_temp` 为空，
+界面只显示 `CPU: xx°C`。所以 `wireless-tools` 不是可选工具，是温度显示的功能依赖。
+
+验证：
+
+```sh
+ubus call luci getTempInfo     # 期望 {"tempinfo": "CPU: 41.4°C, WiFi: 48°C/46°C"}
+iwpriv ra0 stat | grep CurrentTemperature
+```
+
+`apk add wireless-tools` 能临时恢复，但装在 overlay，**刷机/恢复出厂后丢失**，
+所以已写进 `config/ax6000.config` 与 `config/required-packages.txt`。

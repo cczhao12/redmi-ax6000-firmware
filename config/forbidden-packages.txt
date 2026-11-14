@@ -47,4 +47,3 @@ libfido2
 libcbor
 libevdev
 libudev-zero
-wireless-tools

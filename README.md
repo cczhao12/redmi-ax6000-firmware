@@ -32,7 +32,7 @@
 **编译侧（改变包集合 / 编译选项）**
 
 - **包精简**：ATA/SCSI/VFAT/NLS、ebtables、tcpdump/libpcap、htop/nano/libncurses/terminfo、
-  openssh-keygen/libfido2/libcbor/libevdev/libudev-zero、wireless-tools、
+  openssh-keygen/libfido2/libcbor/libevdev/libudev-zero、
   `luci-theme-bootstrap-mod`、`kmod-ifb` 全部不装。
 - **移除 WOL**（`luci-app-wol` / `luci-i18n-wol-zh-cn` / `etherwake`）。
 - `hnat-detect` / `mtk-smp` 显式锁定（MT7986 的 HNAT 检测与 SMP 调优）。

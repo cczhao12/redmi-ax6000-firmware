@@ -37,3 +37,21 @@ workflow 对显式键做逐键比对（warning）；关键键（目标机型、W
 而上游 `target/linux/generic/config-6.12` 默认把 `CONFIG_IP_NF_IPTABLES` /
 `CONFIG_NETFILTER_XTABLES` 关掉，模块不编，打包时直接 `ERROR: module ... is missing`。
 fw4 与 `nftables` 都不依赖它，所以现在直接禁掉。若以后要恢复，必须同时打开那两个内核符号。
+
+## 5. 不要在 `make world` 之前单独编 mt_wifi 做 smoke
+
+试过两次，都失败在与驱动无关的地方：
+
+| run | 报错 | 原因 |
+|---|---|---|
+| #16 | `staging_dir/host/bin/openssl: No such file or directory` | `make package/xxx/compile` 不会构建 host 工具，缺 `tools/install` |
+| #17 | `No rule to make target '.../linux-6.12.112/.config'`（`conninfra` / `gpio-button-hotplug` 失败） | 缺 `target/compile`，内核 `.config` 还没生成；这两个都是内核相关包 |
+
+补齐 `tools/install` + `toolchain/install` + `target/compile` 之后，总耗时与直接 `make world` 基本相同，
+收益只剩「早 20 分钟暴露」，不划算，已撤掉。
+
+**兜底方案**（现在的做法）：`make world` 失败后，从日志里解析出 `ERROR: package/xxx failed to build`，
+对那个包单独跑 `make <pkg>/compile V=s`。此时内核已编好，依赖齐全，几秒钟就能拿到具体报错行。
+
+> 教训：smoke 这类"提前编译"只有在能便宜地准备好依赖链时才划算；
+> OpenWrt 的包依赖内核 `.config`，这个前置本身就是 world 的大部分工作量。

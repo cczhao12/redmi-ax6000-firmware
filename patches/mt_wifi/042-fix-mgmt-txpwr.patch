@@ -1,0 +1,25 @@
+--- a/mt_wifi/embedded/ap/ap_cfg.c
++++ b/mt_wifi/embedded/ap/ap_cfg.c
+@@ -26,6 +26,10 @@
+ 
+ 
+ #include "rt_config.h"
++
++#ifdef MGMT_TXPWR_CTRL
++#include "mac/mac_mt/fmac/mt_fmac.h"
++#endif
+ 
+ #ifdef RLM_CAL_CACHE_SUPPORT
+ #include "phy/rlm_cal_cache.h"
+--- a/mt_wifi/embedded/common/cmm_cfg.c
++++ b/mt_wifi/embedded/common/cmm_cfg.c
+@@ -23,6 +23,9 @@
+ */
+ 
+ #include "rt_config.h"
++#ifdef MGMT_TXPWR_CTRL
++#include "mac/mac_mt/fmac/mt_fmac.h"
++#endif
+ #if (defined(TR181_SUPPORT) || defined(DATA_TXPWR_CTRL))
+ #include "hdev/hdev_basic.h"
+ #endif /*TR181_SUPPORT*/

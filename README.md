@@ -213,6 +213,8 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 - **性能参数未上机验证**：4 个 sysctl 值、CPU governor 档位都是保守建议。
 - **不做代码签名**：只提供 SHA256，请核对后再刷。
 - **CI 只验证编译和配置**：WiFi/HNAT/fullcone 需要上机验证。
+- **PR 检查不编译**：`pr-check.yml` 只跑 `make defconfig` + 配置断言，可能出现「PR 绿、build 红」，真正的编译结论以 build workflow 为准。
+- **驱动补丁依赖上游代码结构**：见 [`docs/known-issues.md`](docs/known-issues.md)；补丁应用失败时 `WiFi 驱动预编译（smoke）` 会先红，不会浪费整轮。
 - **自定义配置不在仓库里**：WiFi SSID/密钥、IPv6 放行规则 `fn` 恢复出厂会丢，先备份 `/etc/config`。
 - **全锥形不等于公网 NAT1**：WAN 是 RFC1918 地址，上游还有 CGNAT。
 - **只支持 MTK U-Boot 布局**：不要拿 stock bootloader 镜像互刷。

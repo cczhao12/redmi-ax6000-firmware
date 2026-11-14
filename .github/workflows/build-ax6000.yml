@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: '上游：pinned=用 config/upstream.lock（默认）；40 位 SHA=测试构建（不发 Release）；留空=跟 25.12 最新（不推荐）'
+        description: '上游：pinned=用 config/upstream.lock（默认，tag 也走这个）；latest=跟 25.12 最新（不推荐）；40 位 SHA=测试构建（不发 Release）'
         required: false
         default: 'pinned'
       hardening:
@@ -80,9 +80,11 @@ jobs:
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: |
           set -euo pipefail
-          REF="${UPSTREAM_REF:-}"
+          # tag 触发时 inputs 为空；这里必须回落到 pinned，否则打 tag 会绕过
+          # config/upstream.lock 去跟分支最新，等于把没验证过的上游直接发 Release。
+          REF="${UPSTREAM_REF:-pinned}"
           case "$REF" in
-            '')
+            latest)
               TARGET=$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | awk '{print $1}')
               printf '%s' "$TARGET" | grep -Eq '^[0-9a-f]{40}$' \
                 || { echo "无法解析上游 ${UPSTREAM_BRANCH} HEAD" >&2; exit 1; }
@@ -122,6 +124,21 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
           echo "上游: ${SOURCE_REPO}@${SHA} (${MODE})"
           git log -1 --format='%ci  %s'
+
+      # 上游 mt_wifi 的 ap_cfg.c / cmm_cfg.c 在 MGMT_TXPWR_CTRL 下调用了
+      # wtbl_update_pwr_offset()，却没有 include 声明它的 mt_fmac.h（7672 / 7673 都有）。
+      # 补丁放本仓库、checkout 上游后注入，避免改 fork（sync 是 fast-forward，会被冲掉）。
+      - name: 注入本地驱动补丁
+        run: |
+          set -euo pipefail
+          SRC=patches/mt_wifi/042-fix-mgmt-txpwr.patch
+          [ -f "$SRC" ] || { echo "缺少 $SRC" >&2; exit 1; }
+          for v in 7672 7673; do
+            dest="openwrt/package/mtk/drivers/mt_wifi/patches-$v/$(basename "$SRC")"
+            install -D -m644 "$SRC" "$dest"
+            echo "已注入 $dest"
+          done
+          echo "MT_WIFI_PATCH_SHA256=$(sha256sum "$SRC" | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: 计算版本号
         id: meta
@@ -198,6 +215,7 @@ jobs:
             echo "FEEDS_LOCK_SHA256=$(sha256sum out/feeds.lock | cut -d' ' -f1)"
             echo "UPSTREAM_MODE=${UPSTREAM_MODE:-latest}"
             echo "HARDENING=${HARDENING:-on}"
+            echo "MT_WIFI_PATCH_SHA256=${MT_WIFI_PATCH_SHA256:-none}"
             echo "BUILD_DATE=${BUILD_DATE}"
           } > "$DEST"/etc/ax6000-build-info
 
@@ -253,6 +271,17 @@ jobs:
           done < /tmp/config.keys
           echo "配置校验通过"
 
+      # 驱动在全量 world 的末尾才编，出错时已经过去 80+ 分钟。
+      # 这里先把工具链 + 内核 + mt_wifi 编出来，同类问题能提前暴露；
+      # 后面 make world 会复用这些产物，不会重编。
+      - name: WiFi 驱动预编译（smoke）
+        timeout-minutes: 100
+        run: |
+          set -euo pipefail
+          cd openwrt
+          make -j"$(nproc)" package/mtk/drivers/mt_wifi/compile V=s 2>&1 | tee -a build.log
+          echo "mt_wifi 编译通过"
+
       - name: 预下载源码
         timeout-minutes: 45
         run: |
@@ -279,12 +308,21 @@ jobs:
               | tail -80 || true
             echo "--- build.log 尾部 200 行 ---"
             tail -200 build.log || true
-            # 3d34af8 以「全量 -j1 重试做不完」为由删掉了重试，但 OpenWrt 的 make 是
-            # 增量构建：-j1 V=s 只会继续未完成的包，不会从头重编。并行竞态 / OOM 类
-            # 失败靠这一步救回；真正的编译错误也会因 V=s 在这里给出完整命令行。
-            # 原仓库 714b898 的构建成功过，它带的正是这个 -j1 重试。
-            echo "--- 增量 -j1 V=s 重试（只继续未完成的包）---"
-            make -j1 V=s 2>&1 | tee -a build.log
+
+            # 只有疑似 transient（并行竞态 / OOM / 磁盘）才整体重试；
+            # 真正的编译错误无条件重跑 -j1 V=s 只会把同一个错误再打一遍、白花十几分钟。
+            if grep -qE 'Killed|signal terminated|No space left|Cannot allocate memory|Error 137' build.log; then
+              echo "--- 疑似 transient 错误，增量 -j1 V=s 重试 ---"
+              make -j1 V=s 2>&1 | tee -a build.log
+            else
+              # 只对出错的那个包补一次详细日志（几秒），不重跑全量。
+              FAILED_PKG=$(grep -oE 'ERROR: package/[^ ]+ failed to build' build.log | tail -1 | awk '{print $2}' || true)
+              if [ -n "$FAILED_PKG" ]; then
+                echo "--- 失败包 ${FAILED_PKG}，单独 V=s 重编以拿到详细日志 ---"
+                make "$FAILED_PKG/compile" V=s 2>&1 | tee -a build.log || true
+              fi
+              exit 1
+            fi
           fi
 
       - name: 收集固件和元数据
@@ -309,6 +347,7 @@ jobs:
             echo "FEEDS_LOCK_SHA256=$(sha256sum feeds.lock | cut -d' ' -f1)"
             echo "UPSTREAM_MODE=${UPSTREAM_MODE:-latest}"
             echo "HARDENING=${{ inputs.hardening || 'on' }}"
+            echo "MT_WIFI_PATCH_SHA256=${MT_WIFI_PATCH_SHA256:-none}"
             echo "KERNEL=$(grep -m1 '^CONFIG_KERNEL_VERSION=' ../openwrt/.config || true)"
             echo "WIFI_DRIVER=$(grep -m1 '^CONFIG_MTK_MT_WIFI_DRIVER_VERSION_' ../openwrt/.config || true)"
             echo "WIFI_FIRMWARE=$(grep -m1 '^CONFIG_MTK_MT_WIFI_FIRMWARE_PATH_MT7986=' ../openwrt/.config || true)"

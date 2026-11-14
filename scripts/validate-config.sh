@@ -107,6 +107,23 @@ if [ -n "$CONFIG" ]; then
       fail "不应出现的包: $p"
     fi
   done < config/forbidden-packages.txt
+
+  # 上游 mt_wifi（7672 / 7673）的 ap_cfg.c / cmm_cfg.c 在 MGMT_TXPWR_CTRL 下调用了
+  # wtbl_update_pwr_offset()，却没有 include 声明它的 mt_fmac.h。
+  # 开了这个选项就必须带本地补丁，否则会在全量编译末期报 implicit declaration。
+  if grep -Fxq 'CONFIG_MTK_MGMT_TXPWR_CTRL=y' "$CONFIG" \
+     && [ ! -f patches/mt_wifi/042-fix-mgmt-txpwr.patch ]; then
+    fail 'CONFIG_MTK_MGMT_TXPWR_CTRL=y 需要 patches/mt_wifi/042-fix-mgmt-txpwr.patch'
+  fi
+
+  # 关键键从 warning 升级为硬失败：这几项一旦漂移，问题都要到编译末期才暴露。
+  for key in \
+    'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-mtkuboot=y' \
+    'CONFIG_MTK_MT_WIFI_DRIVER_VERSION_7673=y' \
+    'CONFIG_MTK_MGMT_TXPWR_CTRL=y'; do
+    grep -Fxq "$key" "$CONFIG" || fail "关键配置漂移: ${key} 不在 ${CONFIG}"
+  done
+
   ok "defconfig 断言: $CONFIG"
 fi
 

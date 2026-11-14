@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-11-14 — 修复 mt_wifi 驱动编译失败 + 流程整改
+
+### 根因
+
+run #14 在 `编译` 步骤失败，`package/mtk/drivers/mt_wifi` 报
+`ap_cfg.c:3903: error: implicit declaration of function 'wtbl_update_pwr_offset'`。
+上游 7672/7673 的 `ap_cfg.c`、`cmm_cfg.c` 在 `#ifdef MGMT_TXPWR_CTRL` 下调用了该函数，
+却没有 include 声明它的 `mt_fmac.h`。详见 `docs/known-issues.md`。
+
+### 改动
+
+1. **驱动补丁**：新增 `patches/mt_wifi/042-fix-mgmt-txpwr.patch`，workflow 在 checkout
+   上游后注入 `patches-7672/` 与 `patches-7673/`；补丁 sha256 写入 `BUILD_INFO`。
+2. **驱动 smoke**：`make defconfig` 后先单独跑
+   `make package/mtk/drivers/mt_wifi/compile V=s`，把同类错误从「80 分钟后」提前到
+   内核编完即暴露；后续 `make world` 复用这些产物。
+3. **关键配置硬失败**：`validate-config.sh` 新增断言——`MGMT_TXPWR_CTRL=y` 必须有补丁，
+   且目标机型 / `MTK_MT_WIFI_DRIVER_VERSION_7673` / `MGMT_TXPWR_CTRL` 三项漂移即 fail。
+4. **tag 不再绕过 pinned**：`REF="${UPSTREAM_REF:-pinned}"`，原 `''` 分支改为 `latest`。
+   此前打 `v*` tag 时 `inputs` 为空会走 latest，等于拿未验证的上游直接发 Release。
+5. **失败重试收窄**：只有 `Killed` / `OOM` / `No space` / `signal terminated` / `Error 137`
+   这类 transient 才整体 `-j1 V=s` 重试；真实编译错误只对失败包单独 `V=s` 重编拿日志，
+   不再白跑十几分钟、把同一个错误打两遍。
+6. **文档**：新增 `docs/known-issues.md`；README 补 PR 检查边界；config 头部同步 pinned 说明。
+
 ## 2026-11-13 — 上游改为自己的 fork + 默认 pinned
 
 构建输入彻底固定：

@@ -272,13 +272,21 @@ jobs:
           echo "配置校验通过"
 
       # 驱动在全量 world 的末尾才编，出错时已经过去 80+ 分钟。
-      # 这里先把工具链 + 内核 + mt_wifi 编出来，同类问题能提前暴露；
+      # 这里先把 host 工具 + 工具链 + mt_wifi 编出来，同类问题能提前暴露；
       # 后面 make world 会复用这些产物，不会重编。
+      #
+      # 注意：make package/xxx/compile 不会自动构建 host 工具，必须显式
+      # tools/install + toolchain/install，否则会以
+      #   "staging_dir/host/bin/openssl: No such file or directory" /
+      #   "libdeflate-gzip: No such file or directory" / "not look like a tar archive"
+      # 这种与驱动无关的方式失败。
       - name: WiFi 驱动预编译（smoke）
-        timeout-minutes: 100
+        timeout-minutes: 120
         run: |
           set -euo pipefail
           cd openwrt
+          make -j"$(nproc)" tools/install 2>&1 | tee -a build.log
+          make -j"$(nproc)" toolchain/install 2>&1 | tee -a build.log
           make -j"$(nproc)" package/mtk/drivers/mt_wifi/compile V=s 2>&1 | tee -a build.log
           echo "mt_wifi 编译通过"
 

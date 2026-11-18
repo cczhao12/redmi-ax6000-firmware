@@ -1,6 +1,7 @@
-# 2026-11-13 15:18 UTC（上游 dde141f9 的提交时刻）各 feed 的 openwrt-25.12 HEAD，
-# 用 GitHub API `commits?sha=openwrt-25.12&until=2026-11-13T15:18:45Z&per_page=1` 还原。
-# 配合 config/upstream.lock 的 dde141f9202df9bd11a44550730a122c45eae256。
+# 2026-11-15 14:56 UTC（上游 458d2f7e 的提交时刻）各 feed 的 openwrt-25.12 HEAD，
+# 用 GitHub API `commits?sha=openwrt-25.12&until=2026-11-15T14:56:43Z&per_page=1` 还原。
+# 配合 config/upstream.lock 的 458d2f7e9295ee3709dc4f0d5ca5fabbd4cc1863。
+# 复核结论：五个 feed 自 2026-11-13 起均未前进，下面的 SHA 与上一版完全相同。
 # 来源必须与上游 feeds.conf.default 一致（packages/luci 是 immortalwrt 的 fork，
 # routing/telephony/video 是 openwrt 官方仓库），不要换成别的仓库去核对 SHA。
 # 格式: <feeds 目录名> <40 位小写 commit SHA>

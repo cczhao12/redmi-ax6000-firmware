@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-11-18 — 跟进上游 59 个提交（`dde141f9` → `458d2f7e`）
+
+上游 `chasey-dev/immortalwrt-mt798x-rebase` 的 `25.12` 在 11-13 之后前进 59 个提交，主体是一次
+三方同步：`Merge Official Source`（11-11）+ `Merge MTK OpenWrt Feeds (2026-11-11)` +
+`mediatek: refresh repo patches`。大部分改动落在 airoha / qualcommax / ramips / bcm27xx 等
+其它芯片，**对 AX6000 真正生效的只有下面这些**：
+
+- 内核 `6.12.112` → `6.12.116`（四个稳定版）；`mac80211`、`nat46` 随之补了 6.12.114+ 的适配；
+- `mtk_hnat` 净 **+692/−203** 行：per-SoC QDMA TX 队列数与寄存器分页、DSA 用户口 → QDMA 队列映射、
+  PPPoE 桥接规则模式、hash 冲突统计、L3 长度溢出丢包；
+- `mtk_eth_soc` 新增 eth-56/57/58/59/60：拆分 `mtk_ppe` start/stop、xfrm 解密 CDRT 句柄等；
+- DSA `mt7531`：`get_stats64`、CPU 口 VLAN 复位、VLAN-aware PVID untag、regmap IRQ 串行化、总线读错误检查；
+- `mt_wifi` 源码**未变**（`package/mtk` 下仅 `luci-app-eqos-mtk` 有改动，本仓库已禁用该包），
+  `patches/mt_wifi/042` 的注入点 `patches-7672/7673` 依然有效；
+- 通用修复：`musl` regcomp 整数溢出、`hostapd` ubus beacon report 缓冲区溢出、
+  `dnsmasq` SIGHUP 重载过慢、`uhttpd`/`libubox`/`ucode` 更新、
+  `set_netdev_label` 改两阶段改名（修 eth0↔eth1 互换时的名字冲突）。
+
+**验证**（run #21，`upstream_ref=458d2f7e...`，`hardening=on`，只产 artifact）：
+
+- 编译 50 分钟通过，未产生 Release；
+- artifact 上机：内核 `6.12.116`；HNAT 驱动横幅 `wan=eth1 lan=lan lan2=eth2 ppd=eth0 rx-ppd=rxppd`、
+  `hook_toggle=enabled`；`qdma_txq0..63` 共 64 个 TX 队列全部存在；
+- WED/WHNAT `chip_id=7986 is in WHNAT support list` → `create wed ok`，ring 初始化成功；
+- `pppoe-wan` 收发 0 丢包 0 错误；`eth0` 硬件队列 `TxDrop/TxCrcErr/TxDeferred/RxDrop` 全为 0；
+- NAPT 表项正常绑定（PPE0 BIND 计数 3→4）；12 路并发 53 Mbps 时 CPU 98% 空闲，瓶颈在上游；
+- 无线 `rax0` HE160 上 5G 客户端 2401 Mbps PHY；温度 41.1°C、load 0.01；`dmesg` 无 oops；
+- `mt7530 ... -517`（EPROBE_DEFER）、`warp_dev0 ... wed2: error -1`（MT7986 无第二个 WED）、
+  `flowtable=0`（脚本显式关闭）均为已知正常现象。
+
+**改动**：
+
+- `config/upstream.lock`：`dde141f9` → `458d2f7e`；
+- `config/feeds.lock`：注释里的上游引用与 `until` 时刻更新为 `2026-11-15T14:56:43Z`；
+  五个 feed 自 11-13 起未前进，**SHA 值与上一版完全相同**（已逐个用 API 复核）；
+- `config/ax6000.config` 注释里的上游引用同步更新。
+
 ## 2026-11-14 — 加回 wireless-tools（修 WiFi 温度）与 tcpdump
 
 **症状**：LuCI 概览只剩 `CPU: 41.4°C`，`WiFi: xx°C/xx°C` 消失。

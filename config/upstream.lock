@@ -1,13 +1,14 @@
 # 钉死的上游 commit。workflow 默认 upstream_ref=pinned 时读这一行。
 #
 # 这个 SHA 是 cczhao12/immortalwrt-mt798x-rebase（自己的 fork）的 25.12 HEAD。
-# 2026-11-13 通过 GitHub "Sync fork"（merge-upstream，fast-forward）与
+# 2026-11-18 通过 GitHub "Sync fork"（merge-upstream，fast-forward）与
 # chasey-dev/immortalwrt-mt798x-rebase 同步，两者此刻完全一致。
-# 配套 config/feeds.lock 用同一提交时刻（until=2026-11-13T15:18:45Z）的 feeds HEAD。
+# 配套 config/feeds.lock 用同一提交时刻（until=2026-11-15T14:56:43Z）的 feeds HEAD。
+# 该 SHA 已通过 run #21 测试构建（只产 artifact、未发 Release）并上机验证。
 #
 # 升级流程：
 #   1. 在 GitHub 上 sync fork（或把某个上游 commit push 进去）
 #   2. workflow_dispatch 用 upstream_ref=<新 SHA> 做测试构建（只产 artifact、不发 Release）
 #   3. 完整编译成功、上机正常后改这里，并用 until=<新提交时刻> 重新锁 config/feeds.lock
 # 格式: 一行 40 位小写 commit SHA
-dde141f9202df9bd11a44550730a122c45eae256
+458d2f7e9295ee3709dc4f0d5ca5fabbd4cc1863

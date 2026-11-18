@@ -1,17 +1,20 @@
 #!/bin/sh
-# 让 IPv6 端口放行规则跟着 NAS 的地址走。
 #
-# 解析链：NAS 内网 IPv4（默认 192.168.6.4，可 ax6000.nas.ip 覆盖）
-#         -> 邻居表查 MAC -> 按 MAC 找到全局 IPv6
+# 让 firewall.nas_v6_ports 的 dest_ip 跟着 NAS 的地址走。
 #
-# 防的三个坑：
-#   1) 邻居表会长期保留 STALE 条目，前缀换了旧地址还在，排序也不保证；
-#   2) 地址可能是压缩写法（::），用 cut -f1-4 取前缀会错位，所以统一展开成
-#      32 位十六进制再比较；
-#   3) 事件可能丢失或早于 NAS 完成 SLAAC，因此另有 10 分钟兜底定时器。
+# 核心约定
+#   1. 身份锚点只有一个：NAS 的 MAC，存在 /etc/config/ax6000，不进公开仓库。
+#      首次运行时从 ARP 学一次并写回 UCI（TOFU），此后永不再信任 ARP。
+#   2. dest_ip = br-lan 当前公网 /64 + 固定后缀。
+#      后缀优先取邻居表里"该 MAC 的真实地址"（顺带兼容非 EUI-64 的设备）；
+#      取不到就按 EUI-64 由 MAC 推出。确实想写死可用 ax6000.nas.suffix 覆盖。
+#   3. 可达性只写日志，不作为写回条件 —— NAS 离线时地址依然是确定的，
+#      规则应当先写对，等 NAS 上线即可用。
+#   4. 任何一步拿不到确定值：只记日志并退出，绝不把规则放开成 dest='*'。
+#      若此时 dest_ip 本来就是空的（等于对内网全网段放行），临时 disable 该规则。
 #
 # 触发：/etc/hotplug.d/iface/90-nas-v6 + /etc/init.d/ax6000-nas-v6-watch
-# 幂等：当前地址仍然有效时直接退出，不做任何写操作。
+# 日志：logger -t nas-v6-fw，查看 logread -e nas-v6-fw
 
 RULE='nas_v6_ports'
 IFACE='br-lan'
@@ -19,10 +22,10 @@ LOCK='/tmp/.nas-v6-firewall.lock'
 
 log() { logger -t nas-v6-fw "$*"; }
 
-# 同一时刻只允许一个实例（hotplug 与定时器可能撞车）
+# 同一时刻只允许一个实例；等锁而不是直接丢弃（丢弃会丢掉前缀变更事件）
 if command -v flock >/dev/null 2>&1; then
 	exec 9>"$LOCK"
-	flock -n 9 || exit 0
+	flock -w 20 9 || { log "等待锁超时，跳过本轮"; exit 0; }
 fi
 
 NAS_IP="$(uci -q get ax6000.nas.ip)"
@@ -47,10 +50,10 @@ norm6() {
 		}'
 }
 
-# 前 4 组（/64）的规范化键，用于比较
+# 前 4 组（/64）的规范化键
 pfx_key() { norm6 "$1" | cut -c1-16; }
 
-# 16 位十六进制还原成 4 组前缀文本（去掉前导零，写法与内核一致）
+# 16 位十六进制还原成 4 组前缀文本（去掉前导零，与内核写法一致）
 hex4_to_text() {
 	awk -v s="$1" 'BEGIN {
 		for (i = 1; i <= 4; i++) {
@@ -63,11 +66,7 @@ hex4_to_text() {
 	}'
 }
 
-# 前 4 组还原成可读前缀，用于拼地址
-pfx_text() {
-	hex4_to_text "$(norm6 "$1" | cut -c1-16)"
-}
-
+pfx_text() { hex4_to_text "$(norm6 "$1" | cut -c1-16)"; }
 ping_ok() {
 	if command -v ping6 >/dev/null 2>&1; then
 		ping6 -c 1 -W 1 "$1" >/dev/null 2>&1
@@ -76,28 +75,37 @@ ping_ok() {
 	fi
 }
 
-# br-lan 当前持有的公网 /64 前缀（跳过 ULA 与链路本地）
+# br-lan 当前持有的公网 /64（跳过 ULA 与已废弃的前缀）
 lan_prefixes() {
 	ip -6 addr show dev "$IFACE" scope global 2>/dev/null |
-		awk '$1 == "inet6" { split($2, a, "/"); print a[1] }' |
+		awk '$1 == "inet6"; $0 !~ /deprecated/ { split($2, a, "/"); print a[1] }' |
 		while read -r a; do
 			[ -n "$a" ] || continue
 			p="$(pfx_text "$a")"
-			case "$p" in fc*|fd*) continue ;; esac
+			case "$p" in ""|fc*|fd*) continue ;; esac
 			echo "$p"
 		done | sort -u
 }
 
-# 由 MAC 推出 EUI-64 后缀：52:54:00:12:34:56 -> 5054:00ff:fe12:3456
+# MAC -> EUI-64 后缀：52:54:00:12:34:56 -> 5054:00ff:fe12:3456
+# 输入格式非法时输出空（避免 $((0x..)) 在 ash 下报算术错误）
 eui64_suffix() {
+	mac="$(printf '%s' "$1" | tr 'A-F-' 'a-f:')"
+	case "$mac" in
+		"" | *[!0-9a-f:]*) return 0 ;;
+	esac
 	IFS=':' read -r m1 m2 m3 m4 m5 m6 <<EOF
-$1
+$mac
 EOF
+	for g in "$m1" "$m2" "$m3" "$m4" "$m5" "$m6"; do
+		[ ${#g} -eq 2 ] || return 0
+	done
 	printf '%02x%02x:%02xff:fe%02x:%02x%02x' \
 		$((0x$m1 ^ 2)) $((0x$m2)) $((0x$m3)) \
 		$((0x$m4)) $((0x$m5)) $((0x$m6))
 }
 
+# 内网 IPv4 -> MAC（仅在首次自举、或 ax6000.nas.mac 未配置时使用）
 mac_of_ip() {
 	ip neigh show dev "$IFACE" 2>/dev/null |
 		awk -v ip="$NAS_IP" '
@@ -107,74 +115,104 @@ mac_of_ip() {
 			}'
 }
 
-# ---- 1. 前置条件 ----
+# 按 MAC 在邻居表里找落在当前前缀内的真实地址（可能多条）
+addr_of_mac() {
+	ip -6 neigh show dev "$IFACE" 2>/dev/null |
+		awk -v mac="$1" '
+			BEGIN { mac = tolower(mac) }
+			{
+				m = ""
+				for (i = 2; i < NF; i++)
+					if ($i == "lladdr") { m = tolower($(i + 1)); break }
+				if (m == mac) { if ($1 ~ /:/) { if ($1 !~ /^fe80/) print $1 } }
+			}' |
+		while read -r a; do
+			k="$(pfx_key "$a")"
+			case " $PREFIX_KEYS " in
+				*" $k "*) printf '%s\n' "$a" ;;
+			esac
+		done
+}
+
+# dest_ip 为空时该规则等于对内网全网段放行，出现意外就临时关掉
+disable_rule() {
+	uci -q set "firewall.$RULE.enabled=0" &&
+		uci -q commit firewall &&
+		fw4 reload >/dev/null 2>&1 &&
+		log "警告：dest_ip 为空时规则等于对内网全网段放行，已临时 disable $RULE（修好后记得 enabled=1）"
+}
+# ---- 1. 前缀 ----
 PREFIXES="$(lan_prefixes)"
 [ -n "$PREFIXES" ] || { log "br-lan 没有公网 IPv6 前缀，保持规则不动"; exit 0; }
 
-PREFIX_KEYS="$(for p in $PREFIXES; do pfx_key "$p"; done)"
+PREFIX_KEYS="$(for p in $PREFIXES; do printf '%s ' "$(pfx_key "$p")"; done)"
 
+# ---- 2. 规则 ----
 if [ -z "$(uci -q get "firewall.$RULE")" ]; then
-	log "规则 $RULE 不存在，跳过（先用 LuCI 建好这条放行规则）"
+	log "规则 $RULE 不存在，跳过（先在 LuCI 建好这条放行规则）"
 	exit 0
 fi
 
 CUR="$(uci -q get "firewall.$RULE.dest_ip")"
 
-valid_addr() {
-	k="$(pfx_key "$1")"
-	[ -n "$k" ] || return 1
-	echo "$PREFIX_KEYS" | grep -qx "$k" || return 1
-	ping_ok "$1"
-}
-
-# ---- 2. 当前地址还活着就什么都不做 ----
-if [ -n "$CUR" ] && valid_addr "$CUR"; then
-	exit 0
+# ---- 3. 身份锚点：固定后缀，或 NAS 的 MAC ----
+SUF="$(uci -q get ax6000.nas.suffix)"
+NAS_MAC=
+if [ -z "$SUF" ]; then
+	NAS_MAC="$(uci -q get ax6000.nas.mac)"
+	if [ -z "$NAS_MAC" ]; then
+		NAS_MAC="$(mac_of_ip)"
+		[ -n "$NAS_MAC" ] || { ping -c 1 -W 1 "$NAS_IP" >/dev/null 2>&1; NAS_MAC="$(mac_of_ip)"; }
+		if [ -n "$NAS_MAC" ]; then
+			# 只学这一次：之后永远用 UCI 里的值，不再信任 ARP
+			uci -q get ax6000.nas >/dev/null 2>&1 || uci -q set ax6000.nas='nas'
+			uci -q set "ax6000.nas.mac=$NAS_MAC"
+			uci -q commit ax6000
+			log "首次运行：把 $NAS_IP 的 MAC 钉入 ax6000.nas.mac = $NAS_MAC（换 NAS 时手动改）"
+		fi
+	fi
+	if [ -z "$NAS_MAC" ]; then
+		log "拿不到 NAS 的 MAC（$NAS_IP 不在 ARP 表？）且未配置 ax6000.nas.suffix，保持规则不动"
+		[ -n "$CUR" ] || disable_rule
+		exit 0
+	fi
+	NAS_MAC="$(printf '%s' "$NAS_MAC" | tr 'A-F' 'a-f')"
 fi
-
-# ---- 3. 解析 MAC ----
-NAS_MAC="$(uci -q get ax6000.nas.mac)"
-if [ -z "$NAS_MAC" ]; then
-	NAS_MAC="$(mac_of_ip)"
-	[ -n "$NAS_MAC" ] || { ping -c 1 -W 1 "$NAS_IP" >/dev/null 2>&1; NAS_MAC="$(mac_of_ip)"; }
+# ---- 4. 取地址：邻居表优先，其次"当前前缀 + 固定后缀" ----
+ADDR=""
+if [ -n "$NAS_MAC" ]; then
+	ADDR="$(addr_of_mac "$NAS_MAC" | head -n 1)"
 fi
-if [ -z "$NAS_MAC" ]; then
-	log "无法从 $NAS_IP 解析 MAC（设备离线？），保持规则不动"
-	exit 0
-fi
-
-# ---- 4. 邻居表候选 ----
-ADDR=
-for cand in $(ip -6 neigh show dev "$IFACE" 2>/dev/null |
-		awk -v mac="$NAS_MAC" '
-			BEGIN { mac = tolower(mac) }
-			tolower($3) == mac && $1 ~ /:/ && $1 !~ /^fe80/ { print $1 }'); do
-	valid_addr "$cand" || continue
-	ADDR="$cand"
-	break
-done
-
-# ---- 5. 兜底：当前前缀 + EUI-64 ----
 if [ -z "$ADDR" ]; then
-	SUF="$(eui64_suffix "$NAS_MAC")"
-	for p in $PREFIXES; do
-		cand="$p:$SUF"
-		ping_ok "$cand" || continue
-		ADDR="$cand"
-		break
-	done
+	[ -n "$SUF" ] || SUF="$(eui64_suffix "$NAS_MAC")"
+	if [ -z "$SUF" ]; then
+		log "$NAS_MAC 无法推出 EUI-64 后缀（MAC 格式不对？），保持规则不动"
+		[ -n "$CUR" ] || disable_rule
+		exit 0
+	fi
+	case "$SUF" in
+		:*) : ;;
+		*) SUF=":$SUF" ;;
+	esac
+	ADDR="$(printf '%s\n' "$PREFIXES" | head -n 1)$SUF"
 fi
 
-if [ -z "$ADDR" ]; then
-	log "$NAS_MAC 没有可用的全局 IPv6（前缀未生效或 NAS 未完成 SLAAC），保持规则不动"
+# ---- 5. 写回 ----
+if [ -n "$CUR" ] && [ "$(norm6 "$CUR")" = "$(norm6 "$ADDR")" ]; then
 	exit 0
 fi
 
-# ---- 6. 写回 ----
-# 用归一化后的值比较，避免 "240e:0341:..." 与 "240e:341:..." 这种同义异写反复改写
-[ -n "$CUR" ] && [ "$(norm6 "$CUR")" = "$(norm6 "$ADDR")" ] && exit 0
-uci -q set "firewall.$RULE.dest_ip=$ADDR"
-uci -q commit firewall
-fw4 reload >/dev/null 2>&1
-log "dest_ip ${CUR:-none} -> $ADDR"
+uci -q set "firewall.$RULE.dest_ip=$ADDR" || { log "uci set 失败，保持原状"; exit 0; }
+uci -q commit firewall || { log "uci commit 失败（与 LuCI 并发？），下一轮重试"; exit 0; }
+
+if fw4 reload >/dev/null 2>&1; then
+	if ping_ok "$ADDR"; then
+		st='可达'
+	else
+		st='当前不可达（NAS 离线或未完成 SLAAC）'
+	fi
+	log "dest_ip ${CUR:-none} -> $ADDR  [mac ${NAS_MAC:-suffix}]  $st"
+else
+	log "fw4 reload 失败：UCI 已写入 $ADDR，但 nft 可能未生效，下一轮重试"
+fi
 exit 0

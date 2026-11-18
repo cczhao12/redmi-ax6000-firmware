@@ -3,7 +3,21 @@
 > 本文件按时间顺序保留多次验证结果。**读之前先看是哪一轮**：`3d34af8` 的 defconfig 结果
 > 不能代表 `3892b02` 之后的 config；本轮 review 修订只做了静态验证，没有完整编译和上机。
 
-## 2026-11-14 — 上游固定为 fork + pinned 到同步后的最新（当前）
+## 2026-11-18 — 上游前进到 `458d2f7e`（当前）
+
+| 项 | 值 |
+|---|---|
+| 上游 SHA | `458d2f7e9295ee3709dc4f0d5ca5fabbd4cc1863`（2026-11-18 用 `merge-upstream` 同步，fast-forward，与 chasey-dev 一致） |
+| feeds | 同一提交时刻 `until=2026-11-15T14:56:43Z` 还原：`packages fa25995d` / `luci 8f18275b` / `routing 625f9d84` / `telephony c58ec5a6` / `video 094bf58d`。**五个 feed 自 11-13 起未前进，SHA 与上一轮完全相同**（已逐个用 API 复核） |
+| 编译硬化 | 全开（未改） |
+| 包改动 | 未改（`config/ax6000.config` 与 required/forbidden 清单均未动） |
+
+run #21（`upstream_ref=458d2f7e...`，`hardening=on`，只产 artifact）**编译通过**，artifact 已上机验证：
+内核 6.12.116；HNAT 横幅含 `rx-ppd=rxppd`、`hook_toggle=enabled`；`qdma_txq0..63` 64 个 TX 队列齐全；
+WED/WHNAT 初始化成功；`pppoe-wan` 0 丢包 0 错误；`eth0` 硬件队列全 0；NAPT 正常绑定；
+无线 HE160 正常；无 oops。细节见 `CHANGELOG.md` 同日条目。
+
+## 2026-11-14 — 上游固定为 fork + pinned 到同步后的最新（已归档）
 
 | 项 | 值 |
 |---|---|

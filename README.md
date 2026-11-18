@@ -149,7 +149,7 @@ head -1 /proc/interrupts
 
 ### 手动触发
 
-- `upstream_ref=pinned`（**默认**）：用 `config/upstream.lock` 钉死的 `dde141f9`（自己 fork 的 `25.12` HEAD，2026-11-13 与上游同步），构建输入固定、可复现。
+- `upstream_ref=pinned`（**默认**）：用 `config/upstream.lock` 钉死的 `458d2f7e`（自己 fork 的 `25.12` HEAD，2026-11-18 与上游同步，run #21 已验证），构建输入固定、可复现。
 - `upstream_ref` 填 **40 位小写 SHA**：按该 SHA 做**测试构建**，只上传 artifact、不发 Release。**升级上游走这个入口。**
 - `upstream_ref` 留空：解析 fork 的 `25.12` 最新 HEAD（只在刚 sync 完想试探时用，不推荐）。
 - `hardening`：`on`（默认，`CHECK_FORMAT_SECURITY`/`RELRO_FULL`/`CCACHE` 全开）/ `off`（临时关这三项定位失败）。
@@ -222,7 +222,7 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 ## 目录
 
 ```
-.github/workflows/build-ax6000.yml            主构建/发布（上游钉死 9f397975）
+.github/workflows/build-ax6000.yml            主构建/发布（上游钉死 458d2f7e）
 .github/workflows/pr-check.yml               PR / push 配置与脚本校验
 .github/workflows/upstream-watch.yml         上游健康提示（不触发构建）
 config/ax6000.config                         激进配置（包精简 + 硬化全开 + 关厂商调试）

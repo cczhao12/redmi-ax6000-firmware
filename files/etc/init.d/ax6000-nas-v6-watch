@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+# 定时兜底：万一前缀变了却没触发接口事件（DNAT/PD 续租异常、事件丢失、
+# 或者事件发生时 NAS 还没完成 SLAAC），每 10 分钟重跑一次同步。
+# 单次开销约 0.3 秒，地址没变时不做任何写操作。
+USE_PROCD=1
+START=99
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /bin/sh -c 'while true; do sleep 600; /usr/sbin/nas-v6-firewall; done'
+	procd_set_param respawn
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_close_instance
+}

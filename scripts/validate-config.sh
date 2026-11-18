@@ -20,7 +20,8 @@ files/etc/init.d/ledinterval
 files/etc/init.d/ax6000-firstboot-guard
 files/etc/init.d/ax6000-perf
 files/usr/sbin/nas-v6-firewall
-files/etc/hotplug.d/iface/90-nas-v6"
+files/etc/hotplug.d/iface/90-nas-v6
+files/etc/init.d/ax6000-nas-v6-watch"
 
 for f in $FIRMWARE_FILES; do
   [ -f "$f" ] || fail "缺少固件脚本 $f"
@@ -31,7 +32,7 @@ DEFAULTS=files/etc/uci-defaults/99-ax6000-defaults
 GUARD=files/etc/init.d/ax6000-firstboot-guard
 for needle in 'system.network_led' 'tcpcca=cubic' 'fullcone=1' \
               'flow_offloading=0' 'block-wan-mgmt' 'ax6000-firstboot-guard enable' \
-              'mtk_smp enable' 'ax6000-perf enable' \
+              'mtk_smp enable' 'ax6000-perf enable' 'ax6000-nas-v6-watch enable' \
               'net.netfilter.nf_conntrack_max' 'net.core.netdev_max_backlog' \
               'nf_conntrack_tcp_timeout_established' 'vm.swappiness'; do
   grep -Fq "$needle" "$DEFAULTS" || fail "99-ax6000-defaults 缺少 $needle"

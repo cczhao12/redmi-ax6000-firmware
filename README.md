@@ -152,6 +152,8 @@ head -1 /proc/interrupts
 
 ## IPv6 端口放行：只对一台设备开放，且跟着地址走
 
+> 完整机制、演进过程与踩过的坑见 [`docs/ipv6-port-forwarding.md`](docs/ipv6-port-forwarding.md)。
+
 背景：线路只有 IPv6 公网，NAS 需要从外网访问 `tcp/udp 36353-36354`。
 原先那条规则是 `dest='*'`，等于**内网每台设备**都开了这两个端口；直接写死 NAS 的地址也不行 ——
 前缀由 ISP 通过 PD 下发，重拨后会变。
@@ -345,6 +347,7 @@ docs/defaults.md                             默认值明细
 docs/validation.md                           成功基线 / 失败对照 / 恢复路线
 docs/flashing.md                             刷机
 docs/recovery.md                             救砖
+docs/ipv6-port-forwarding.md                 NAS IPv6 放行机制（原理 / 漏洞 / 运维）
 ```
 
 ## 许可

@@ -45,13 +45,15 @@
 > 时上游 `9f397975` 没有这个包，defconfig 会丢弃它，硬断言会让回退模式直接红。
 > 跟最新构建时它会被编进去；被丢弃时逐键差异检查会给 warning。
 
-**运行时侧（`files/` 下 4 个脚本，全部进 rootfs）**
+**运行时侧（`files/` 下 6 个脚本，全部进 rootfs）**
 
 - 首启无口令保护：disable `ttyd` + `dropbear` + 所有 `wifi-device`，`wifi down`。
 - 幂等默认值：显式 `flow_offloading=0` / `flow_offloading_hw=0` / `fullcone=1` / `fullcone6=0`、
   HNAT `fastpath=mediatek_hnat`；LAN/hostname/双 LED/WiFi country+ch1/uhttpd 双栈仅当为空写入。
 - WAN 管理面 `block-wan-mgmt`（22/80/7681 REJECT，`family=any`）。
 - 性能/稳定性：`mtk_smp` enable 兜底、`/etc/sysctl.conf` 四键、CPU 调频探测（本内核无 cpufreq，自动跳过）。
+- NAS 的 IPv6 放行地址按 MAC 动态跟随（见下方专节），不再对全网段开放。
+- 取消固件默认的 `min_cache_ttl=3600`，DNS 重新尊重上游 TTL。
 - `/etc/ax6000-build-info` 可自证构建版本。
 
 **工程化**：脚本抽成仓库文件 + `cmp` 注入校验、断言统一到 `scripts/validate-config.sh`、
@@ -84,6 +86,7 @@ MTK 厂商调试选项（WARP/ATE/AIR_MONITOR/SPECTRUM/ICAP、`WARP_MEMORY_LEAK_
 | fw4 卸载 | `flow_offloading=0`、`flow_offloading_hw=0`（uci-defaults 显式写入，仅当为空） |
 | 全锥形 | `fullcone=1`、`fullcone6=0`（仅当为空；模块由上游默认提供） |
 | TCP CC | `cubic`（仅当为空；TurboACC 按自己的 `tcpcca` 设置） |
+| DNS 最小缓存 | 不设 `min_cache_ttl`（跟随上游 TTL；固件默认的 3600 会被删掉） |
 | 首启管理面 | root 无口令时 disable `ttyd` + `dropbear`，并 disable 所有 `wifi-device` |
 | WAN 管理面 | `block-wan-mgmt`：`src=wan`、`family=any`、`proto=tcp`、`dest_port=22 80 7681`、`target=REJECT` |
 | LED | 状态灯/网络灯 `235/255/0`，`netdev` + `tx/rx`，interval 150ms |
@@ -146,6 +149,54 @@ logread -e ax6000-perf | tail -1
 /etc/init.d/mtk_smp enabled && echo mtk_smp-ok
 head -1 /proc/interrupts
 ```
+
+## IPv6 端口放行：只对一台设备开放，且跟着地址走
+
+背景：线路只有 IPv6 公网，NAS 需要从外网访问 `tcp/udp 36353-36354`。
+原先那条规则是 `dest='*'`，等于**内网每台设备**都开了这两个端口；直接写死 NAS 的地址也不行 ——
+前缀由 ISP 通过 PD 下发，重拨后会变。
+
+做法：**不记地址，只记 MAC。**
+
+```
+MAC   e4:3a:6e:86:47:6e
+IPv6  240e:341:9b00:9e00:e63a:6eff:fe86:476e
+                        └─ 前缀（会变） ─┘└──── EUI-64，由 MAC 推导，永远不变 ────┘
+```
+
+NAS 用 EUI-64 接口标识，后缀不会变，所以每次只需按 MAC 问内核「它现在的全局地址是多少」。
+
+| 文件 | 作用 |
+|---|---|
+| `files/usr/sbin/nas-v6-firewall` | 从邻居表按 MAC 解析当前全局地址（查不到就先 `ping6 -I br-lan ff02::1` 触发邻居发现，最多 3 轮）；把结果写进 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；地址没变直接退出，不做无谓重载 |
+| `files/etc/hotplug.d/iface/90-nas-v6` | `wan` / `wan_6` 的 `ifup`、`ifupdate` 触发同步。前缀变化必然伴随这两个事件，**不需要定时任务** |
+
+规则本身是具名 section `nas_v6_ports`（`src=wan`、`family=ipv6`、`dest_port=36353-36354`、
+`target=ACCEPT`）。脚本靠这个名字定位，**不要把它改回匿名 section**，否则脚本会找不到规则。
+
+### 验证
+
+```sh
+uci get firewall.nas_v6_ports.dest_ip     # 应等于 NAS 当前的全局 IPv6
+nft list ruleset | grep 36353             # 应只有 daddr 锁定到 NAS 的那两条
+logread -e nas-v6-fw | tail -2            # 地址变化时这里会留记录
+```
+
+手动补一次（比如前缀变了但没触发重拨）：
+
+```sh
+/usr/sbin/nas-v6-firewall
+```
+
+### 已知边界
+
+- **NAS 关机时**：邻居表查不到，脚本记日志后**保持规则原样**，不会把 `dest_ip` 清空。
+- **NAS 开了 IPv6 隐私扩展（temporary 地址）**：邻居表里会有多个全局地址，脚本取第一个，
+  可能取到会过期的临时地址。**建议在 NAS 上关掉**：`net.ipv6.conf.all.use_tempaddr=0`。
+- **规则被改名/删除**：脚本只记日志跳过，不会创建残缺 section。
+- **持久化分层**：`/usr/sbin`、`/etc/hotplug.d` 在 rootfs（squashfs），**只有刷含本提交的固件才带**；
+  而规则在 `/etc/config/firewall`，刷机保留配置时会继承。两者必须配套 ——
+  如果刷了不含本脚本的旧包，规则还在但地址不再自动跟随。
 
 ## 首启安全窗口（重要）
 
@@ -226,7 +277,7 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 - **CI 只验证编译和配置**：WiFi/HNAT/fullcone 需要上机验证。
 - **PR 检查不编译**：`pr-check.yml` 只跑 `make defconfig` + 配置断言，可能出现「PR 绿、build 红」，真正的编译结论以 build workflow 为准。
 - **驱动补丁依赖上游代码结构**：见 [`docs/known-issues.md`](docs/known-issues.md)；补丁应用失败时 `WiFi 驱动预编译（smoke）` 会先红，不会浪费整轮。
-- **自定义配置不在仓库里**：WiFi SSID/密钥、IPv6 放行规则 `fn` 恢复出厂会丢，先备份 `/etc/config`。
+- **自定义配置不在仓库里**：WiFi SSID/密钥、IPv6 放行规则 `nas_v6_ports` 恢复出厂会丢（刷机保留配置则不丢），先备份 `/etc/config`。
 - **全锥形不等于公网 NAT1**：WAN 是 RFC1918 地址，上游还有 CGNAT。
 - **只支持 MTK U-Boot 布局**：不要拿 stock bootloader 镜像互刷。
 
@@ -245,6 +296,8 @@ files/etc/uci-defaults/99-ax6000-defaults    注入镜像的幂等默认配置 +
 files/etc/init.d/ledinterval                 LED interval 150ms
 files/etc/init.d/ax6000-firstboot-guard      首启无口令保护
 files/etc/init.d/ax6000-perf                 CPU 调频探测（本内核无 cpufreq，自动跳过）
+files/usr/sbin/nas-v6-firewall               按 MAC 同步 NAS 的 IPv6 放行地址
+files/etc/hotplug.d/iface/90-nas-v6          wan / wan_6 事件触发地址同步
 scripts/validate-config.sh                   静态断言 + defconfig 断言（唯一实现）
 docs/changes.md                              变更清单
 docs/defaults.md                             默认值明细

@@ -34,6 +34,17 @@ if [ -z "$cur" ] || [ "$cur" = "192.168.1.1" ]; then
   fi
 fi
 
+# ---------------------------------------------------------------- DHCP 地址池
+# 静态绑定用到 192.168.6.101，而默认池子是 100-249，两者重叠。
+# dnsmasq 虽然会避开已绑定的地址，但把池子挪到 150-249 更干净。
+lant_start="$(uci -q get dhcp.lan.start)"
+lant_limit="$(uci -q get dhcp.lan.limit)"
+if [ "${lant_start:-100}" = "100" ] && [ "${lant_limit:-150}" = "150" ]; then
+  uci -q set dhcp.lan.start='150'
+  uci -q set dhcp.lan.limit='100'
+  uci -q commit dhcp
+fi
+
 hostname="$(uci -q get system.@system[0].hostname)"
 case "$hostname" in
   ''|OpenWrt|ImmortalWrt) uci -q set system.@system[0].hostname='redmi-ax6000' ;;

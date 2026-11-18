@@ -1,12 +1,32 @@
 #!/bin/sh /etc/rc.common
-# 可选性能档位（MT7986A 四核）。
-# 上游内核同时编了 CONFIG_CPU_FREQ_GOV_PERFORMANCE=y 和
-# CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y；默认沿用 schedutil，零行为变化。
-# 想降低突发网络流量下的提频延迟，改 /etc/config/ax6000 的
-# perf.cpu_governor='performance'；注意温度/功耗会上升，改回 schedutil 即可回退。
+# 性能档位（MT7986A 四核）。
+#
+# 【实测事实】当前内核（6.12.x / mediatek filogic）没有编 cpufreq/OPP 支持：
+#   /sys/devices/system/cpu/cpufreq/ 为空，scaling_governor 不存在，
+#   也没有任何 cpufreq 驱动模块。也就是 CPU 定频运行，
+#   "切 schedutil / performance"这个旋钮在本固件上并不存在。
+#
+# 所以本脚本只做「能写才写」：探测到 cpufreq 才应用 uci 里的档位，
+# 探测不到就记一条日志然后退出，不再假装切换成功。
+# 以后若在 config 里打开 CONFIG_CPU_FREQ 并接入 OPP 表，本脚本会自动生效，无需再改。
+#
+# 可用值：schedutil / performance / ondemand / conservative / powersave / userspace
 START=98
 
 boot() {
+  # 取任一可写的 governor 节点作为探测点；一个都没有说明内核没开 cpufreq。
+  probe=
+  for cpu in /sys/devices/system/cpu/cpu[0-9]*; do
+    if [ -w "$cpu/cpufreq/scaling_governor" ]; then
+      probe="$cpu/cpufreq/scaling_governor"
+      break
+    fi
+  done
+  if [ -z "$probe" ]; then
+    logger -t ax6000-perf "no cpufreq support in this kernel; CPU runs at fixed frequency, nothing to tune"
+    return 0
+  fi
+
   gov="$(uci -q get ax6000.perf.cpu_governor)"
   [ -n "$gov" ] || gov='schedutil'
   case "$gov" in

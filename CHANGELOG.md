@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-11-18 — 上机体检：修正 CPU 调频误导、DHCP 池与静态 IP 脱开
+
+上机核对后发现两处「文档/脚本与现实不符」，只改运行时脚本与默认值，**不动编译输入**。
+
+### 1. CPU 调频其实不存在
+
+```
+/sys/devices/system/cpu/cpufreq/                            # 空
+ls /sys/devices/system/cpu/cpu0/ | grep -E 'cpufreq|opp'    # 无输出
+lsmod | grep cpufreq                                        # 无模块
+```
+
+本内核（6.12.116 / mediatek filogic）没有编 cpufreq/OPP，CPU 定频运行。
+因此 `ax6000-perf` 之前的 `[ -w "$f" ] || continue` 每次都是空转，
+README 里「默认 schedutil，可手动切 performance」也是错的。
+
+改动：
+
+- `files/etc/init.d/ax6000-perf`：改为「能写才写」——先探测任一可写的
+  `scaling_governor`，探测不到就 `logger` 记一条后 `return 0`；
+  以后若打开 `CONFIG_CPU_FREQ`，脚本自动生效，无需再改。
+- `README.md` / `config/ax6000.config`：删掉可切档位的说法，改为如实描述。
+
+### 2. DHCP 池与静态绑定重叠
+
+静态表里有 `192.168.6.101`（dbmm），默认池子 100-249 覆盖了它。
+dnsmasq 会避开已绑定地址，但池子与静态段混在一起容易看错、也不便排查。
+
+改动：`files/etc/uci-defaults/99-ax6000-defaults` 在池子仍为默认 100/150 时改成
+`start=150`、`limit=100`（范围 150-249）。已手改过的池子不会被覆盖。
+
 ## 2026-11-18 — 跟进上游 59 个提交（`dde141f9` → `458d2f7e`）
 
 上游 `chasey-dev/immortalwrt-mt798x-rebase` 的 `25.12` 在 11-13 之后前进 59 个提交，主体是一次

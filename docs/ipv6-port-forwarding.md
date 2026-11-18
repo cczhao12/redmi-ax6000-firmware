@@ -105,21 +105,26 @@ PPPoE 重拨 -> ISP 下发新 PD -> netifd 更新 wan_6 / br-lan -> ifupdate 事
 | v2 | 按 MAC 解析（IP -> MAC -> v6） | 解决漂移，但取"第一个匹配" |
 | v3 | 加前缀校验 + ping 校验 + EUI-64 兜底 + 定时器 | 解决旧前缀残留 |
 | v4 | `norm6` 归一化 + `flock` + 沿用当前值 | 修压缩地址错位、并发 |
-| v5 | 修死分支、去掉"ping 当身份"、TOFU 钉 MAC、过滤 deprecated、`timeout` 包住单次执行 | 见下 |
+| v5 | 按 token 定位 lladdr、去掉"ping 当身份"、TOFU 钉 MAC、过滤 deprecated、单次执行加超时 | 见下 |
 
 ### 5.1 v4 里三个真实存在的问题
 
-**1. 邻居表分支永远匹配不到。** v4 用 `tolower($3) == mac` 比较 MAC，
-但 `ip -6 neigh` 的字段是：
+**1. 按 `$3` 匹配 MAC 依赖一个隐式前提。** v4 用 `tolower($3) == mac` 取 MAC。
+`ip -6 neigh show dev br-lan` 的输出只有 4 个字段——iproute2 在指定 dev 过滤时**不打印** `dev <if>`：
 
 ```
-2001:db8:aaaa:bbbb:a8bb:ccff:fedd:eeff dev br-lan lladdr aa:bb:cc:dd:ee:ff REACHABLE
-                  $1                    $2   $3      $4        $5           $6
+2001:db8:aaaa:bbbb:a8bb:ccff:fedd:eeff lladdr aa:bb:cc:dd:ee:ff REACHABLE
+                  $1                   $2        $3           $4
 ```
 
-`$3` 是**接口名**，不是 MAC。于是 v4 的整条邻居表分支是死代码，
-实际每次都在走 EUI-64 兜底——NAS 一旦改用 stable-privacy 或隐私地址就彻底失效，
-且日志只有一行"没有可用的全局 IPv6"。
+此时 `$3` 确实是 MAC，所以在设备上能跑通。但只要调用方式变成不带 `dev` 过滤
+（`ip -6 neigh show`），输出就是 6 个字段、`$3` 变成接口名，条件恒假。
+
+这种"字段位置由调用参数决定"的写法，任何一次改动都会静默失效。
+v5 改成按 token 定位 `lladdr`，两种输出都能正确匹配。
+
+> 更正：早期评审曾把这个判断为"邻居表分支是死代码"，那是按不带 dev 过滤的
+> 输出格式推断的，实际设备上不成立。真正的缺陷是下面的第 2 条。
 
 **2. ping 被当成身份校验。** 配合"沿用当前值只比较前缀 + ping"，
 同网段任何能应答的地址都会被永久认可。NAS 关机期间抢答它的内网 IPv4，

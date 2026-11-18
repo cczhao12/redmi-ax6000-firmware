@@ -13,7 +13,7 @@
 方案：**不记地址，记 MAC**。
 
 - NAS 用 EUI-64 接口标识，后 64 位由 MAC 固定推导
-  （`e4:3a:6e:86:47:6e` → `e63a:6eff:fe86:476e`），只有前缀会变；
+  （`52:54:00:12:34:56` → `5054:00ff:fe12:3456`，示例值），只有前缀会变；
 - `files/usr/sbin/nas-v6-firewall`：每次从邻居表按 MAC 查出当前全局地址
   （查不到就先 `ping6 ff02::1` 触发邻居发现再查，最多 3 轮），
   写回 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；

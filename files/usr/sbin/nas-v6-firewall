@@ -1,18 +1,28 @@
 #!/bin/sh
 # 让 IPv6 端口放行规则跟着 NAS 的地址走。
 #
-# 前提事实（2026-11-18 实测）：
+# 前提事实：
 #   - 本线路只有 IPv6 公网，前缀由 ISP 经 PD 下发，重拨/续租后可能变化；
-#   - NAS 用 EUI-64 接口标识（后 64 位由 MAC 推导：e4:3a:6e:86:47:6e
-#     -> e63a:6eff:fe86:476e），后缀永远不变，只有前缀会变；
+#   - NAS 用 EUI-64 接口标识（后 64 位由 MAC 推导，
+#     例：52:54:00:12:34:56 -> 5054:00ff:fe12:3456），后缀永远不变；
 #   - 所以不需要"记住地址"，只要按 MAC 问内核"它现在的全局地址是什么"。
+#
+# NAS 的 MAC 不写在这里（本仓库是公开的），从 uci 读：
+#   uci set ax6000.nas.mac='AA:BB:CC:DD:EE:FF'
+#   uci commit ax6000
+# 没设置时只记一条日志并跳过，不动规则。
 #
 # 触发点：/etc/hotplug.d/iface/90-nas-v6（wan / wan_6 上线或地址更新时）
 # 幂等：解析出的地址与规则里的一致就直接退出，不做无谓的 firewall reload。
 
-NAS_MAC='e4:3a:6e:86:47:6e'
 RULE='nas_v6_ports'
 IFACE='br-lan'
+
+NAS_MAC="$(uci -q get ax6000.nas.mac)"
+if [ -z "$NAS_MAC" ]; then
+	logger -t nas-v6-fw "ax6000.nas.mac 未设置，跳过；请执行 uci set ax6000.nas.mac='AA:BB:CC:DD:EE:FF' && uci commit ax6000"
+	exit 0
+fi
 
 ping_allnodes() {
 	if command -v ping6 >/dev/null 2>&1; then
@@ -24,8 +34,9 @@ ping_allnodes() {
 
 resolve() {
 	ip -6 neigh show dev "$IFACE" 2>/dev/null |
-		awk -v mac="$NAS_MAC" \
-			'tolower($3) == mac && $1 ~ /:/ && $1 !~ /^fe80/ { print $1; exit }'
+		awk -v mac="$NAS_MAC" '
+			BEGIN { mac = tolower(mac) }
+			tolower($3) == mac && $1 ~ /:/ && $1 !~ /^fe80/ { print $1; exit }'
 }
 
 ADDR=

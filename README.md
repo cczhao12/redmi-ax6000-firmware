@@ -45,7 +45,7 @@
 > 时上游 `9f397975` 没有这个包，defconfig 会丢弃它，硬断言会让回退模式直接红。
 > 跟最新构建时它会被编进去；被丢弃时逐键差异检查会给 warning。
 
-**运行时侧（`files/` 下 6 个脚本，全部进 rootfs）**
+**运行时侧（`files/` 下 7 个脚本，全部进 rootfs）**
 
 - 首启无口令保护：disable `ttyd` + `dropbear` + 所有 `wifi-device`，`wifi down`。
 - 幂等默认值：显式 `flow_offloading=0` / `flow_offloading_hw=0` / `fullcone=1` / `fullcone6=0`、
@@ -173,23 +173,49 @@ NAS 用 EUI-64 接口标识，后缀不会变，所以每次只需按 MAC 问内
 
 | 文件 | 作用 |
 |---|---|
-| `files/usr/sbin/nas-v6-firewall` | 从邻居表按 MAC 解析当前全局地址（查不到就先 `ping6 -I br-lan ff02::1` 触发邻居发现，最多 3 轮）；把结果写进 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；地址没变直接退出，不做无谓重载 |
-| `files/etc/hotplug.d/iface/90-nas-v6` | `wan` / `wan_6` 的 `ifup`、`ifupdate` 触发同步。前缀变化必然伴随这两个事件，**不需要定时任务** |
+| `files/usr/sbin/nas-v6-firewall` | 一次性的"解析 + 写回"：IP → MAC → 全局 IPv6，写入 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；结果与规则一致就直接退出 |
+| `files/etc/hotplug.d/iface/90-nas-v6` | `wan` / `wan_6` 的 `ifup`、`ifupdate` 触发同步（前缀变化的主要路径） |
+| `files/etc/init.d/ax6000-nas-v6-watch` | 每 10 分钟兜底跑一次。防的是「前缀变了但没触发接口事件」以及「事件来了但 NAS 还没完成 SLAAC」 |
 
 规则本身是具名 section `nas_v6_ports`（`src=wan`、`family=ipv6`、`dest_port=36353-36354`、
 `target=ACCEPT`）。脚本靠这个名字定位，**不要把它改回匿名 section**，否则脚本会找不到规则。
+
+### 为什么不能"取邻居表里第一个匹配的地址"
+
+实测过：同一台 NAS 在邻居表里有 4 条记录，其中**包含上一轮 PD 的旧前缀**：
+
+```
+240e:...:9b00:9e00:e63a:6eff:fe86:476e  STALE   ← 当前前缀
+240e:...:9b4d:c300:e63a:6eff:fe86:476e  STALE   ← 上一轮前缀，已废弃
+fd31:...          / fe80::...                    ← ULA 与链路本地
+```
+
+邻居表是缓存，旧条目不会因为前缀作废就消失，而且排序不保证。如果直接取第一个，
+前缀切换后可能把规则钉到一个**已死的地址**上；更糟的是写进去之后"看起来成功了"，
+就再也不会自我纠正。
+
+所以候选地址必须同时通过两道校验：
+
+1. **前缀校验**：它的 /64 必须是 `br-lan` 当前持有的公网前缀之一（跳过 ULA `fc00::/7`）；
+2. **连通校验**：`ping6 -c1 -W1` 必须真的有回应。
+
+两道都不过时，才用「当前前缀 + 由 MAC 推导的 EUI-64 后缀」直接算出地址，再 ping 验证。
+这样即使邻居表完全为空、或者全是旧前缀，也能恢复。
 
 ### 验证
 
 ```sh
 uci get firewall.nas_v6_ports.dest_ip     # 应等于 NAS 当前的全局 IPv6
 nft list ruleset | grep 36353             # 应只有 daddr 锁定到 NAS 的那两条
-logread -e nas-v6-fw | tail -2            # 地址变化时这里会留记录
+logread -e nas-v6-fw | tail -5            # 地址变化时这里会留记录
+/usr/sbin/nas-v6-firewall                 # 手动补一次
 ```
 
-手动补一次（比如前缀变了但没触发重拨）：
+回归测试（把规则故意指向旧前缀地址，再手动跑一次，应立即纠正）：
 
 ```sh
+uci set firewall.nas_v6_ports.dest_ip='240e:...:旧前缀:...'
+uci commit firewall
 /usr/sbin/nas-v6-firewall
 ```
 
@@ -303,6 +329,7 @@ files/etc/init.d/ax6000-firstboot-guard      首启无口令保护
 files/etc/init.d/ax6000-perf                 CPU 调频探测（本内核无 cpufreq，自动跳过）
 files/usr/sbin/nas-v6-firewall               按 MAC 同步 NAS 的 IPv6 放行地址
 files/etc/hotplug.d/iface/90-nas-v6          wan / wan_6 事件触发地址同步
+files/etc/init.d/ax6000-nas-v6-watch         每 10 分钟兜底同步（防漏事件）
 scripts/validate-config.sh                   静态断言 + defconfig 断言（唯一实现）
 docs/changes.md                              变更清单
 docs/defaults.md                             默认值明细

@@ -45,6 +45,11 @@ if [ "${lant_start:-100}" = "100" ] && [ "${lant_limit:-150}" = "150" ]; then
   uci -q commit dhcp
 fi
 
+# ---------------------------------------------------------------- 运行时服务
+# NAS 放行地址的兜底定时器：前缀变了但没触发接口事件时也能纠正。
+/etc/init.d/ax6000-nas-v6-watch enable 2>/dev/null
+/etc/init.d/ax6000-nas-v6-watch start 2>/dev/null
+
 # ---------------------------------------------------------------- DNS 缓存
 # 固件默认 min_cache_ttl=3600：强制所有解析结果至少缓存 1 小时，会覆盖上游 TTL，
 # 把 CDN/GSLB 的结果钉在旧节点上。恢复成 dnsmasq 默认（0，尊重上游 TTL）。

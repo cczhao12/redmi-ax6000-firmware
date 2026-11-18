@@ -170,10 +170,17 @@ if [ -z "$SUF" ]; then
 		[ -n "$NAS_MAC" ] || { ping -c 1 -W 1 "$NAS_IP" >/dev/null 2>&1; NAS_MAC="$(mac_of_ip)"; }
 		if [ -n "$NAS_MAC" ]; then
 			# 只学这一次：之后永远用 UCI 里的值，不再信任 ARP
-			uci -q get ax6000.nas >/dev/null 2>&1 || uci -q set ax6000.nas='nas'
-			uci -q set "ax6000.nas.mac=$NAS_MAC"
-			uci -q commit ax6000
-			log "首次运行：把 $NAS_IP 的 MAC 钉入 ax6000.nas.mac = $NAS_MAC（换 NAS 时手动改）"
+			# 注意：这个 uci 版本不会自动创建配置文件，必须先落一个空文件
+			if [ ! -f /etc/config/ax6000 ]; then : >/etc/config/ax6000; fi
+			if [ -z "$(uci -q get ax6000.nas)" ]; then uci -q set ax6000.nas='nas'; fi
+			uas_ok=1
+			if ! uci -q set "ax6000.nas.mac=$NAS_MAC"; then uas_ok=0; fi
+			if ! uci -q commit ax6000; then uas_ok=0; fi
+			if [ "$uas_ok" = 1 ]; then
+				log "首次运行：把 $NAS_IP 的 MAC 钉入 ax6000.nas.mac = $NAS_MAC（换 NAS 时手动改）"
+			else
+				log "警告：MAC $NAS_MAC 写不进 ax6000.nas.mac，下一轮会重新从 ARP 学"
+			fi
 		fi
 	fi
 	if [ -z "$NAS_MAC" ]; then

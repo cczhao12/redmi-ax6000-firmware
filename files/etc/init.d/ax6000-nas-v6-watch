@@ -2,8 +2,8 @@
 # 定时兜底：前缀变了却没触发接口事件（事件丢失、事件早于 NAS 完成 SLAAC、
 # 或者局端静默改前缀），每 10 分钟重跑一次同步。地址没变时不做任何写操作。
 #
-# 用 timeout 包住：单次执行若卡在 fw4 reload / uci 锁上，本轮会被杀掉，
-# 循环继续往下走，不会像原来那样整体挂死（procd 的 respawn 只管进程退出）。
+# 本固件没有 timeout（busybox 也没编进该 applet），所以用 shell 自己实现：
+# 单次执行超过 120 秒就收掉，避免卡在 fw4 reload / uci 锁上导致整个循环挂死。
 USE_PROCD=1
 START=99
 
@@ -12,8 +12,13 @@ start_service() {
 	procd_set_param command /bin/sh -c '
 		sleep 20
 		while true; do
-			timeout 120 /usr/sbin/nas-v6-firewall
-			sleep 600
+			/usr/sbin/nas-v6-firewall &
+			_p=$!
+			( sleep 120; kill "$_p" 2>/dev/null ) &
+			_w=$!
+			wait "$_p"
+			kill "$_w" 2>/dev/null
+			sleep 580
 		done'
 	procd_set_param respawn
 	procd_set_param stdout 0

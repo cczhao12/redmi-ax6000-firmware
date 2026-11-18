@@ -13,7 +13,7 @@
 - `CONFIG_PKG_CHECK_FORMAT_SECURITY=y`、`CONFIG_PKG_RELRO_FULL=y`、`CONFIG_CCACHE=y`
 - 显式 `CONFIG_PACKAGE_kmod-nft-fullcone=y`
 - 包精简、移除 WOL、`hnat-detect`/`mtk-smp`、BBR 走 cubic
-- CPU 调频默认 `schedutil`（7x24 家用不常驻满频；需要时手动切 `performance`）
+- CPU 固定频率运行（本内核未编 cpufreq/OPP，没有调频器可切）
 
 **代价必须说清**：这就是 run #7 失败（`ERROR: package/kernel/linux failed to build.`）的编译输入，
 成功不保证。但失败时**不用改代码**就能定位或回退：
@@ -51,7 +51,7 @@
 - 幂等默认值：显式 `flow_offloading=0` / `flow_offloading_hw=0` / `fullcone=1` / `fullcone6=0`、
   HNAT `fastpath=mediatek_hnat`；LAN/hostname/双 LED/WiFi country+ch1/uhttpd 双栈仅当为空写入。
 - WAN 管理面 `block-wan-mgmt`（22/80/7681 REJECT，`family=any`）。
-- 性能/稳定性：`mtk_smp` enable 兜底、`/etc/sysctl.conf` 四键、可选 CPU governor 档位。
+- 性能/稳定性：`mtk_smp` enable 兜底、`/etc/sysctl.conf` 四键、CPU 调频探测（本内核无 cpufreq，自动跳过）。
 - `/etc/ax6000-build-info` 可自证构建版本。
 
 **工程化**：脚本抽成仓库文件 + `cmp` 注入校验、断言统一到 `scripts/validate-config.sh`、
@@ -87,7 +87,7 @@ MTK 厂商调试选项（WARP/ATE/AIR_MONITOR/SPECTRUM/ICAP、`WARP_MEMORY_LEAK_
 | 首启管理面 | root 无口令时 disable `ttyd` + `dropbear`，并 disable 所有 `wifi-device` |
 | WAN 管理面 | `block-wan-mgmt`：`src=wan`、`family=any`、`proto=tcp`、`dest_port=22 80 7681`、`target=REJECT` |
 | LED | 状态灯/网络灯 `235/255/0`，`netdev` + `tx/rx`，interval 150ms |
-| CPU 调频 | `schedutil`（上游默认，按负载调频）；需要时可手动切 `performance` |
+| CPU 调频 | **不存在**：本内核未编 cpufreq/OPP，CPU 定频运行；`ax6000-perf` 只做探测 |
 | 其他 | WOL 不装；`zram-swap`、`luci-app-autoreboot`、`openssh-sftp-server` 保留 |
 
 > 已手改的值不会被覆盖。例外：`block-wan-mgmt`、首启空密码保护、`/etc/sysctl.conf` 的 4 个键每次升级检查补齐。
@@ -116,22 +116,33 @@ OpenWrt 打包时会自动 enable 包内 init 脚本，uci-defaults 再 `enable`
 > 不加 `kernel.panic_on_oops`：上游 `10-default.conf` 已有 `kernel.panic=3`，内核有 `MEDIATEK_WATCHDOG`；
 > 把 oops 变 panic 容易让驱动偶发异常变循环重启。`nf_conntrack_max` 约多占 20-30MB 内存。
 
-### 3. 可选 CPU 调频档位
+### 3. CPU 调频：本内核没有这个能力
 
-`ax6000-perf` 每次 boot 读 `ax6000.perf.cpu_governor`，**默认 `schedutil`**（上游默认，按负载调频）。
-不建议 7x24 常驻 `performance`：被动散热下夏季更容易触发 thermal 降频，反而带来抖动；需要时可临时切换：
+2026-11-18 上机核对结论：**这个内核没有编 cpufreq/OPP**。
 
 ```sh
-uci set ax6000.perf.cpu_governor='performance'; uci commit ax6000; /etc/init.d/ax6000-perf start
-# 回退
-uci set ax6000.perf.cpu_governor='schedutil'; uci commit ax6000; /etc/init.d/ax6000-perf start
+ls /sys/devices/system/cpu/cpufreq/                        # 空
+ls /sys/devices/system/cpu/cpu0/ | grep -E 'cpufreq|opp'   # 无输出
+lsmod | grep cpufreq                                       # 无模块
 ```
+
+即 CPU 定频运行，`schedutil` / `performance` 这类档位在硬件层面不存在。
+`ax6000-perf` 因此退化为探测脚本：开机检测到可写的 `scaling_governor` 才应用
+`ax6000.perf.cpu_governor`，检测不到就记一条日志后直接退出：
+
+```sh
+logread -e ax6000-perf | tail -1
+# ax6000-perf: no cpufreq support in this kernel; CPU runs at fixed frequency, nothing to tune
+```
+
+想真正拿到调频能力，需要在内核 config 打开 `CONFIG_CPU_FREQ` 并在 DTS/OPP 层接入，
+属于要重新编译验证的改动，目前没有做。
 
 刷完核对：
 
 ```sh
 cat /proc/sys/net/netfilter/nf_conntrack_max
-cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+logread -e ax6000-perf | tail -1
 /etc/init.d/mtk_smp enabled && echo mtk_smp-ok
 head -1 /proc/interrupts
 ```
@@ -210,7 +221,7 @@ vYYYY.MM.DD-<上游 sha7>-<本仓库 sha7>
 
 ## 已知边界
 
-- **性能参数未上机验证**：4 个 sysctl 值、CPU governor 档位都是保守建议。
+- **性能参数未上机验证**：4 个 sysctl 值都是保守建议；CPU governor 一项已确认本内核不支持（见上）。
 - **不做代码签名**：只提供 SHA256，请核对后再刷。
 - **CI 只验证编译和配置**：WiFi/HNAT/fullcone 需要上机验证。
 - **PR 检查不编译**：`pr-check.yml` 只跑 `make defconfig` + 配置断言，可能出现「PR 绿、build 红」，真正的编译结论以 build workflow 为准。
@@ -233,7 +244,7 @@ config/forbidden-packages.txt                构建后不应存在（39 项）
 files/etc/uci-defaults/99-ax6000-defaults    注入镜像的幂等默认配置 + 性能 sysctl
 files/etc/init.d/ledinterval                 LED interval 150ms
 files/etc/init.d/ax6000-firstboot-guard      首启无口令保护
-files/etc/init.d/ax6000-perf                 可选 CPU 调频档位（默认 schedutil）
+files/etc/init.d/ax6000-perf                 CPU 调频探测（本内核无 cpufreq，自动跳过）
 scripts/validate-config.sh                   静态断言 + defconfig 断言（唯一实现）
 docs/changes.md                              变更清单
 docs/defaults.md                             默认值明细

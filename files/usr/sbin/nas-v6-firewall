@@ -25,7 +25,12 @@ log() { logger -t nas-v6-fw "$*"; }
 # 同一时刻只允许一个实例；等锁而不是直接丢弃（丢弃会丢掉前缀变更事件）
 if command -v flock >/dev/null 2>&1; then
 	exec 9>"$LOCK"
-	flock -w 20 9 || { log "等待锁超时，跳过本轮"; exit 0; }
+	_i=0
+	while ! flock -n 9; do
+		_i=$((_i + 1))
+		[ "$_i" -ge 10 ] && { log "等待锁超时，跳过本轮"; exit 0; }
+		sleep 1
+	done
 fi
 
 NAS_IP="$(uci -q get ax6000.nas.ip)"

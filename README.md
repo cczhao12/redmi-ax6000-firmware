@@ -166,16 +166,22 @@ IPv6  2001:db8:1:2:5054:00ff:fe12:3456   （文档专用前缀 2001:db8::/32）
       └──── 前缀（会变） ────┘└──── EUI-64：由 MAC 推导，永远不变 ────┘
 ```
 
-NAS 用 EUI-64 接口标识，后缀不会变，所以每次只需按 MAC 问内核「它现在的全局地址是多少」。
+NAS 用 EUI-64 接口标识，后缀不会变，所以每次只需问一句「它现在的全局地址是多少」。
 
-> **脚本里既没有 MAC 也没有真实地址。** 它按内网 IPv4 反查：默认 `192.168.6.4`，
-> 可用 `uci set ax6000.nas.ip='192.168.6.x'` 覆盖；需要固定 MAC 时再配
-> `uci set ax6000.nas.mac='AA:BB:CC:DD:EE:FF'`（配了就跳过反查）。
-> 两者都拿不到时，脚本只记一条日志并跳过，不动规则。
+> **脚本里既没有 MAC 也没有真实地址。** 第一次运行时它按内网 IPv4（默认 `192.168.6.4`，
+> 可用 `uci set ax6000.nas.ip='192.168.6.x'` 覆盖）查一次 ARP，把 MAC **钉进
+> `ax6000.nas.mac`**，之后永远用这个值，**不再信任 ARP**。
+>
+> 原因：ARP 应答没有认证。NAS 关机时同网段任何机器都能抢答它的 IPv4，
+> 如果每次都重新反查，等于允许别人把这两个端口的公网转发劫持到自己身上；
+> 钉死一次之后，抢答就没有意义了。
+>
+> 换 NAS 时改这一项：`uci set ax6000.nas.mac='AA:BB:CC:DD:EE:FF'`。
+> 想彻底摆脱 EUI-64 时，用 `uci set ax6000.nas.suffix='::4'` 显式指定后缀。
 
 | 文件 | 作用 |
 |---|---|
-| `files/usr/sbin/nas-v6-firewall` | 一次性的"解析 + 写回"：IP → MAC → 全局 IPv6，写入 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；结果与规则一致就直接退出 |
+| `files/usr/sbin/nas-v6-firewall` | 一次性的"解析 + 写回"：按 MAC 取全局 IPv6，写入 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；结果与规则一致就直接退出 |
 | `files/etc/hotplug.d/iface/90-nas-v6` | `wan` / `wan_6` 的 `ifup`、`ifupdate` 触发同步（前缀变化的主要路径） |
 | `files/etc/init.d/ax6000-nas-v6-watch` | 每 10 分钟兜底跑一次。防的是「前缀变了但没触发接口事件」以及「事件来了但 NAS 还没完成 SLAAC」 |
 
@@ -187,35 +193,44 @@ NAS 用 EUI-64 接口标识，后缀不会变，所以每次只需按 MAC 问内
 实测过：同一台 NAS 在邻居表里有 4 条记录，其中**包含上一轮 PD 的旧前缀**：
 
 ```
-240e:...:9b00:9e00:e63a:6eff:fe86:476e  STALE   ← 当前前缀
-240e:...:9b4d:c300:e63a:6eff:fe86:476e  STALE   ← 上一轮前缀，已废弃
-fd31:...          / fe80::...                    ← ULA 与链路本地
+2001:db8:aaaa:bbbb:5054:00ff:fe12:3456  STALE   ← 当前前缀
+2001:db8:1111:2222:5054:00ff:fe12:3456  STALE   ← 上一轮前缀，已废弃
+fd31:...          / fe80::...                   ← ULA 与链路本地
 ```
 
 邻居表是缓存，旧条目不会因为前缀作废就消失，而且排序不保证。如果直接取第一个，
 前缀切换后可能把规则钉到一个**已死的地址**上；更糟的是写进去之后"看起来成功了"，
 就再也不会自我纠正。
 
-所以候选地址必须同时通过两道校验：
+所以候选地址必须同时满足两点：
 
-1. **前缀校验**：它的 /64 必须是 `br-lan` 当前持有的公网前缀之一（跳过 ULA `fc00::/7`）；
-2. **连通校验**：`ping6 -c1 -W1` 必须真的有回应。
+1. **归属校验**：邻居表里这条记录的 `lladdr` 必须就是 NAS 的 MAC —— 不是"随便一个能应答的地址"；
+2. **前缀校验**：它的 /64 必须是 `br-lan` 当前持有的公网前缀之一（跳过 ULA `fc00::/7`
+   和已 `deprecated` 的旧前缀）。
 
-两道都不过时，才用「当前前缀 + 由 MAC 推导的 EUI-64 后缀」直接算出地址，再 ping 验证。
-这样即使邻居表完全为空、或者全是旧前缀，也能恢复。
+两个都不满足时，才用「当前前缀 + 由 MAC 推导的 EUI-64 后缀」直接算出地址。
+这一步是确定性推导，不依赖邻居表，所以 NAS 刚上电还没完成 SLAAC、甚至离线时，规则照样能先写对。
 
-实现上还有三个细节：
+**可达性只写日志，不参与判断。** `ping` 通只说明"有人应答"，不说明应答的是 NAS；
+`ping` 不通也不说明地址错了。而且 NAS 离线时，规则恰恰应该先写对，等它上线就能用。
+
+实现上还有四个细节：
 
 - **地址先归一化再比较**：`::` 压缩写法会让 `cut -d: -f1-4` 取错段（实测
   `fd31:a5df:b924::1` 会算出 `fd31:a5df:b924:`，末尾多一个空段），所以统一展开成
   32 位十六进制再比；
-- **当前地址仍然有效就不动**：`dest_ip` 若已通过上面两道校验，直接退出，避免多前缀
-  或排序变化导致来回改写；
+- **当前地址仍然有效就不动**：`dest_ip` 若同时通过归属校验和前缀校验，直接退出，
+  避免多前缀或排序变化导致来回改写；
+- **按 token 定位 `lladdr`，不写死字段序号**：`ip -6 neigh show dev br-lan` 在指定
+  dev 过滤时**不打印** `dev <if>`（4 个字段），不带过滤时才打印（6 个字段）。
+  写死 `$3` 会在两种调用方式之间静默失效；
 - **同一时刻只跑一个实例**：`flock` 防止 hotplug 与 10 分钟定时器撞车。
+  固件里是 busybox 版 flock，没有 `-w`，所以用 `-n` 加 1 秒重试。
 
 ### 验证
 
 ```sh
+uci get ax6000.nas.mac                    # 钉住的 NAS MAC（第一次运行自动写入）
 uci get firewall.nas_v6_ports.dest_ip     # 应等于 NAS 当前的全局 IPv6
 nft list ruleset | grep 36353             # 应只有 daddr 锁定到 NAS 的那两条
 logread -e nas-v6-fw | tail -5            # 地址变化时这里会留记录
@@ -225,19 +240,26 @@ logread -e nas-v6-fw | tail -5            # 地址变化时这里会留记录
 回归测试（把规则故意指向旧前缀地址，再手动跑一次，应立即纠正）：
 
 ```sh
-uci set firewall.nas_v6_ports.dest_ip='240e:...:旧前缀:...'
+uci set firewall.nas_v6_ports.dest_ip='2001:db8:dead:beef:5054:00ff:fe12:3456'
 uci commit firewall
 /usr/sbin/nas-v6-firewall
 ```
 
 ### 已知边界
 
-- **NAS 关机时**：先 `ping` 一次把邻居表填上，仍查不到就记日志并**保持规则原样**，不会把 `dest_ip` 清空。
-- **NAS 开了 IPv6 隐私扩展（temporary 地址）**：邻居表里会有多个全局地址，脚本取第一个，
-  可能取到会过期的临时地址。**建议在 NAS 上关掉**：`net.ipv6.conf.all.use_tempaddr=0`。
+- **NAS 关机 / 离线**：地址是确定性推导的，规则照样写对，日志里标「当前不可达」，等它上线即可用。
+- **首次自举时有人抢答 ARP**：MAC 可能钉错。这个窗口只存在一次，日志会打印钉住的 MAC，
+  发现不对就手动改 `ax6000.nas.mac`。想彻底避免，刷完机直接手动设一次。
+- **NAS 换了、MAC 没跟着改**：规则会指向一个不存在的地址（fail-closed，不会误开给别的设备），
+  日志显示「当前不可达」。
+- **NAS 开了 IPv6 隐私扩展（temporary 地址）**：临时地址和稳定地址来自同一个 MAC，
+  邻居表里会同时出现，脚本取第一个，可能取到会过期的临时地址。
+  **建议在 NAS 上关掉**：`net.ipv6.conf.all.use_tempaddr=0`。
+- **`dest_ip` 为空**：这条规则等于对内网全网段放行。脚本在身份无法确定时会把规则临时
+  `enabled=0` 并在日志里警告；修好后记得手动 `enabled=1`。
 - **规则被改名/删除**：脚本只记日志跳过，不会创建残缺 section。
 - **持久化分层**：`/usr/sbin`、`/etc/hotplug.d` 在 rootfs（squashfs），**只有刷含本提交的固件才带**；
-  而规则在 `/etc/config/firewall`，刷机保留配置时会继承。两者必须配套 ——
+  而规则和 `ax6000.nas.mac` 在 `/etc/config`，刷机保留配置时会继承。两者必须配套 ——
   如果刷了不含本脚本的旧包，规则还在但地址不再自动跟随。
 
 ## 首启安全窗口（重要）
@@ -338,9 +360,9 @@ files/etc/uci-defaults/99-ax6000-defaults    注入镜像的幂等默认配置 +
 files/etc/init.d/ledinterval                 LED interval 150ms
 files/etc/init.d/ax6000-firstboot-guard      首启无口令保护
 files/etc/init.d/ax6000-perf                 CPU 调频探测（本内核无 cpufreq，自动跳过）
-files/usr/sbin/nas-v6-firewall               按 MAC 同步 NAS 的 IPv6 放行地址
+files/usr/sbin/nas-v6-firewall               按钉住的 MAC 同步 NAS 的 IPv6 放行地址
 files/etc/hotplug.d/iface/90-nas-v6          wan / wan_6 事件触发地址同步
-files/etc/init.d/ax6000-nas-v6-watch         每 10 分钟兜底同步（防漏事件）
+files/etc/init.d/ax6000-nas-v6-watch         每 10 分钟兜底同步（防漏事件，单次带超时）
 scripts/validate-config.sh                   静态断言 + defconfig 断言（唯一实现）
 docs/changes.md                              变更清单
 docs/defaults.md                             默认值明细

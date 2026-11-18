@@ -18,7 +18,9 @@ ok() { echo "OK: $*"; }
 FIRMWARE_FILES="files/etc/uci-defaults/99-ax6000-defaults
 files/etc/init.d/ledinterval
 files/etc/init.d/ax6000-firstboot-guard
-files/etc/init.d/ax6000-perf"
+files/etc/init.d/ax6000-perf
+files/usr/sbin/nas-v6-firewall
+files/etc/hotplug.d/iface/90-nas-v6"
 
 for f in $FIRMWARE_FILES; do
   [ -f "$f" ] || fail "缺少固件脚本 $f"
@@ -43,6 +45,10 @@ grep -Fq 'return 0' files/etc/init.d/ax6000-perf \
   || fail 'ax6000-perf 缺少 return 0'
 grep -Fq 'scaling_governor' files/etc/init.d/ax6000-perf \
   || fail 'ax6000-perf 缺少 CPU governor 处理'
+grep -Fq "nas_v6_ports" files/usr/sbin/nas-v6-firewall \
+  || fail 'nas-v6-firewall 缺少目标规则名 nas_v6_ports'
+grep -Fq 'ifupdate' files/etc/hotplug.d/iface/90-nas-v6 \
+  || fail '90-nas-v6 缺少 ifupdate 触发'
 ok '固件脚本静态校验'
 
 # ---------------------------------------------------------------- 2. 包清单

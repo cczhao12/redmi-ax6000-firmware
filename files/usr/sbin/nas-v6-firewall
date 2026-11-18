@@ -1,0 +1,59 @@
+#!/bin/sh
+# 让 IPv6 端口放行规则跟着 NAS 的地址走。
+#
+# 前提事实（2026-11-18 实测）：
+#   - 本线路只有 IPv6 公网，前缀由 ISP 经 PD 下发，重拨/续租后可能变化；
+#   - NAS 用 EUI-64 接口标识（后 64 位由 MAC 推导：e4:3a:6e:86:47:6e
+#     -> e63a:6eff:fe86:476e），后缀永远不变，只有前缀会变；
+#   - 所以不需要"记住地址"，只要按 MAC 问内核"它现在的全局地址是什么"。
+#
+# 触发点：/etc/hotplug.d/iface/90-nas-v6（wan / wan_6 上线或地址更新时）
+# 幂等：解析出的地址与规则里的一致就直接退出，不做无谓的 firewall reload。
+
+NAS_MAC='e4:3a:6e:86:47:6e'
+RULE='nas_v6_ports'
+IFACE='br-lan'
+
+ping_allnodes() {
+	if command -v ping6 >/dev/null 2>&1; then
+		ping6 -c 1 -W 1 -I "$IFACE" ff02::1 >/dev/null 2>&1
+	elif ping -6 -c 1 -W 1 -I "$IFACE" ff02::1 >/dev/null 2>&1; then
+		:
+	fi
+}
+
+resolve() {
+	ip -6 neigh show dev "$IFACE" 2>/dev/null |
+		awk -v mac="$NAS_MAC" \
+			'tolower($3) == mac && $1 ~ /:/ && $1 !~ /^fe80/ { print $1; exit }'
+}
+
+ADDR=
+i=0
+while [ "$i" -lt 3 ]; do
+	ADDR="$(resolve)"
+	[ -n "$ADDR" ] && break
+	# 邻居表里没有就先喊一声，让它回个包把表项建起来
+	ping_allnodes
+	sleep 1
+	i=$((i + 1))
+done
+
+if [ -z "$ADDR" ]; then
+	logger -t nas-v6-fw "$NAS_MAC 不在邻居表里，保持规则不动"
+	exit 0
+fi
+
+if [ -z "$(uci -q get "firewall.$RULE")" ]; then
+	logger -t nas-v6-fw "规则 $RULE 不存在，跳过（先用 LuCI 建好这条放行规则）"
+	exit 0
+fi
+
+CUR="$(uci -q get "firewall.$RULE.dest_ip")"
+[ "$CUR" = "$ADDR" ] && exit 0
+
+uci -q set "firewall.$RULE.dest_ip=$ADDR"
+uci -q commit firewall
+fw4 reload >/dev/null 2>&1
+logger -t nas-v6-fw "dest_ip ${CUR:-none} -> $ADDR"
+exit 0

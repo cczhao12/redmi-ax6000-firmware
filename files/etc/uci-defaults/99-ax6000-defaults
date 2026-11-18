@@ -45,6 +45,14 @@ if [ "${lant_start:-100}" = "100" ] && [ "${lant_limit:-150}" = "150" ]; then
   uci -q commit dhcp
 fi
 
+# ---------------------------------------------------------------- DNS 缓存
+# 固件默认 min_cache_ttl=3600：强制所有解析结果至少缓存 1 小时，会覆盖上游 TTL，
+# 把 CDN/GSLB 的结果钉在旧节点上。恢复成 dnsmasq 默认（0，尊重上游 TTL）。
+if [ "$(uci -q get dhcp.@dnsmasq[0].min_cache_ttl)" = "3600" ]; then
+  uci -q delete dhcp.@dnsmasq[0].min_cache_ttl
+  uci -q commit dhcp
+fi
+
 hostname="$(uci -q get system.@system[0].hostname)"
 case "$hostname" in
   ''|OpenWrt|ImmortalWrt) uci -q set system.@system[0].hostname='redmi-ax6000' ;;

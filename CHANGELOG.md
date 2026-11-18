@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-11-18 — IPv6 放行改为按 MAC 动态跟随、取消 DNS 强制缓存
+
+### 1. IPv6 只有公网、前缀会变，规则不能绑死地址
+
+现状：`fn` 这条 v6 放行规则（tcp/udp 36353-36354）是 `dest='*'`，
+等于给内网**每台**设备都开了这两个端口。
+
+目标：只放行 NAS 一台。但这条线路只有 IPv6 公网，前缀由 ISP 经 PD 下发，
+重拨/续租后可能变化 —— 写死地址过几天就失效。
+
+方案：**不记地址，记 MAC**。
+
+- NAS 用 EUI-64 接口标识，后 64 位由 MAC 固定推导
+  （`e4:3a:6e:86:47:6e` → `e63a:6eff:fe86:476e`），只有前缀会变；
+- `files/usr/sbin/nas-v6-firewall`：每次从邻居表按 MAC 查出当前全局地址
+  （查不到就先 `ping6 ff02::1` 触发邻居发现再查，最多 3 轮），
+  写回 `firewall.nas_v6_ports.dest_ip` 后 `fw4 reload`；
+  地址没变直接退出，不做无谓的防火墙重载；规则不存在时只记日志不建残段；
+- `files/etc/hotplug.d/iface/90-nas-v6`：`wan` / `wan_6` 的 `ifup`、`ifupdate`
+  都会调用上面的脚本 —— 前缀变化必然伴随这两个事件，**不需要定时任务**；
+- 规则从匿名 `@rule[9]` 改名为具名 `nas_v6_ports`，脚本才有稳定的引用点。
+
+上机验证：把 `dest_ip` 故意写成 `240e:ffff:ffff:ffff::dead` 模拟前缀变化，
+触发 `ACTION=ifupdate INTERFACE=wan_6` 后自动纠回真实地址，
+`nft` 规则同步变为 `ip6 daddr <NAS> tcp/udp dport 36353-36354 accept`。
+
+### 2. 取消 DNS 强制缓存 1 小时
+
+`/rom/etc/config/dhcp:12` 的 `min_cache_ttl 3600` 是固件默认值，会覆盖上游 TTL，
+把 CDN/GSLB 的结果钉在旧节点。`99-defaults` 在它仍为 3600 时删除该选项，
+回落到 dnsmasq 默认（尊重上游 TTL）。`use_stale_cache=3600` 保留 ——
+上游失败时继续用旧记录，这个是好事。
+
 ## 2026-11-18 — 上机体检：修正 CPU 调频误导、DHCP 池与静态 IP 脱开
 
 上机核对后发现两处「文档/脚本与现实不符」，只改运行时脚本与默认值，**不动编译输入**。

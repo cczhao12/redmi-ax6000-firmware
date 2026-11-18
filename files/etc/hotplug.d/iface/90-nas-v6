@@ -1,0 +1,7 @@
+#!/bin/sh
+# WAN 上线 / IPv6 地址更新时，重新同步 NAS 的放行地址。
+# 只关心 wan 和 wan_6：前缀变化一定伴随这两个接口的 ifup/ifupdate。
+[ "$ACTION" = "ifup" ] || [ "$ACTION" = "ifupdate" ] || exit 0
+case "$INTERFACE" in
+	wan|wan_6) /usr/sbin/nas-v6-firewall ;;
+esac
